@@ -1,5 +1,5 @@
 {
-  "name": "model-selection-plugin",
+  "name": "opencode-sdd-engram-manage",
   "version": "1.0.0",
   "description": "Interactive SDD model selection and profile management for opencode",
   "type": "module",

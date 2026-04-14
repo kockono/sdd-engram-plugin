@@ -27,12 +27,12 @@ If the file doesn't exist, create it at:
 `~/.config/opencode/tui.json`
 
 ### Content
-Add `"model-selection-plugin"` to the `plugin` array:
+Add `"opencode-sdd-engram-manage"` to the `plugin` array:
 
 ```json
 {
    "$schema": "https://opencode.ai/tui.json",
-   "plugin": ["model-selection-plugin"]
+   "plugin": ["opencode-sdd-engram-manage"]
 }
 ```
 
@@ -40,7 +40,7 @@ Add `"model-selection-plugin"` to the `plugin` array:
 
 ## Technical Details
 
-- **Name:** `model-selection-plugin`
+- **Name:** `opencode-sdd-engram-manage`
 - **Engines:** Requires `opencode >= 1.3.13`
 - **Peer Dependencies:** `@opencode-ai/plugin`, `@opentui/core`, `@opentui/solid`, `solid-js`.
 
