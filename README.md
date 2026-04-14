@@ -38,6 +38,14 @@ Add `"opencode-sdd-engram-manage"` to the `plugin` array:
 
 ---
 
+## Usage
+
+This plugin does not have an activation command. It is activated exclusively via a keyboard shortcut:
+
+- **Shortcut:** `Alt + K`
+
+---
+
 ## Technical Details
 
 - **Name:** `opencode-sdd-engram-manage`
