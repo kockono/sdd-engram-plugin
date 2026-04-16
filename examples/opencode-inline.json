@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "sdd-orchestrator": {
+      "model": "openai/gpt-5.3-codex",
+      "prompt": "# Agent Teams Lite — Orchestrator Instructions\n\n## SDD Workflow\n\nExisting workflow content.",
+      "mode": "primary"
+    }
+  }
+}

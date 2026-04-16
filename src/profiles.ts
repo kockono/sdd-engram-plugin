@@ -3,20 +3,25 @@
 
 /**
  * SDD Profiles Logic
- * 
- * Handles reading, writing, and activating profile configurations, 
+ *
+ * Handles reading, writing, and activating profile configurations,
  * focusing on SDD agents and their associated models.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ProfileModels } from "./types";
-import { isManagedSddAgent } from "./utils";
+import { ProfileData, ProfileFallbackModels, ProfileModels } from "./types";
+import {
+  isManagedSddAgent,
+  isFallbackEligibleSddAgent,
+  isPrimarySddAgent,
+  isSddFallbackAgent,
+} from "./utils";
 import { resolvePaths, ensureProfilesDir } from "./config";
 
 /**
  * Checks if a file name represents a valid SDD profile
- * 
+ *
  * @param fileName - The file name to check
  * @returns True if the file has a .json extension
  */
@@ -25,58 +30,132 @@ export function isSddProfile(fileName: string): boolean {
 }
 
 /**
- * Extracts models specifically for managed SDD agents from a configuration object
- * 
+ * Extracts models specifically for managed SDD base agents from a configuration object
+ *
  * @param config - The raw configuration object
  * @returns Mapping of SDD agent names to their model IDs
  */
 export function extractSddAgentModels(config: any): ProfileModels {
   const agents = config?.agent || {};
   return Object.fromEntries(
-    Object.entries(agents).filter(
-      ([name, value]: any) => isManagedSddAgent(name) && typeof value?.model === "string" && value.model
-    ).map(([name, value]: any) => [name, value.model])
+    Object.entries(agents)
+      .filter(
+        ([name, value]: any) =>
+          isPrimarySddAgent(name) &&
+          !isSddFallbackAgent(name) &&
+          typeof value?.model === "string" &&
+          value.model
+      )
+      .map(([name, value]: any) => [name, value.model])
   );
 }
 
 /**
- * Reads and parses SDD agent models from a profile file
- * Supports both full config objects and simple agent-to-model mappings.
- * 
+ * Extracts SDD fallback model mapping from a profile payload
+ */
+export function extractSddFallbackModels(raw: any): ProfileFallbackModels {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+
+  const source = raw.fallback && typeof raw.fallback === "object" && !Array.isArray(raw.fallback)
+    ? raw.fallback
+    : {};
+
+  return Object.fromEntries(
+    Object.entries(source).filter(
+      ([name, value]: any) => isFallbackEligibleSddAgent(name) && typeof value === "string" && value.trim()
+    )
+  );
+}
+
+/**
+ * Reads and parses SDD agent models from a profile file.
+ * Supports full config objects, legacy flat maps, and the new profile payload shape.
+ *
  * @param profilePath - Absolute path to the profile file
  * @returns Mapping of SDD agent names to their model IDs
  */
 export function readProfileModels(profilePath: string): ProfileModels {
   const raw = JSON.parse(fs.readFileSync(profilePath, "utf-8"));
 
-  if (raw && typeof raw === "object" && !Array.isArray(raw) && !raw.agent) {
+  // New profile format: { models: { ... }, fallback: { ... } }
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && raw.models && typeof raw.models === "object") {
+    return Object.fromEntries(
+      Object.entries(raw.models)
+        .filter(([name, value]: any) => isPrimarySddAgent(name) && typeof value === "string" && value.trim())
+        .map(([name, value]: any) => [name, value])
+    );
+  }
+
+  // Legacy profile format: { "sdd-init": "provider/model", ... }
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && !raw.agent && !raw.models) {
     return Object.fromEntries(
       Object.entries(raw)
         .filter(
           ([name, value]: any) =>
-            isManagedSddAgent(name) &&
+            isPrimarySddAgent(name) &&
             ((typeof value === "string" && value) || (typeof value?.model === "string" && value.model))
         )
         .map(([name, value]: any) => [name, typeof value === "string" ? value : value.model])
     );
   }
 
+  // Config format: { agent: { ... } }
   return extractSddAgentModels(raw);
 }
 
 /**
- * Persists SDD agent model mappings to a profile file
- * 
+ * Reads fallback model overrides from a profile file
+ */
+export function readProfileFallbackModels(profilePath: string): ProfileFallbackModels {
+  try {
+    const raw = JSON.parse(fs.readFileSync(profilePath, "utf-8"));
+    return extractSddFallbackModels(raw);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Reads full profile data from file (models + fallback)
+ */
+export function readProfileData(profilePath: string): ProfileData {
+  return {
+    models: readProfileModels(profilePath),
+    fallback: readProfileFallbackModels(profilePath),
+  };
+}
+
+/**
+ * Persists SDD agent model mappings to a profile file,
+ * preserving fallback mappings if present.
+ *
  * @param profilePath - Absolute path where the profile will be saved
  * @param models - Mapping of SDD agent names to their model IDs
  */
 export function writeProfileModels(profilePath: string, models: ProfileModels): void {
-  fs.writeFileSync(profilePath, JSON.stringify(models, null, 2));
+  const fallback = readProfileFallbackModels(profilePath);
+  const payload: ProfileData = {
+    models,
+    ...(Object.keys(fallback).length > 0 ? { fallback } : {}),
+  };
+  fs.writeFileSync(profilePath, JSON.stringify(payload, null, 2));
+}
+
+/**
+ * Writes fallback model overrides while preserving primary models
+ */
+export function writeProfileFallbackModels(profilePath: string, fallback: ProfileFallbackModels): void {
+  const models = readProfileModels(profilePath);
+  const payload: ProfileData = {
+    models,
+    ...(Object.keys(fallback).length > 0 ? { fallback } : {}),
+  };
+  fs.writeFileSync(profilePath, JSON.stringify(payload, null, 2));
 }
 
 /**
  * Identifies which profile file (if any) matches the currently active system configuration
- * 
+ *
  * @param files - List of profile file names to check
  * @param api - The TUI API instance
  * @returns The matching profile file name or undefined
@@ -86,7 +165,7 @@ export function detectActiveProfileFile(files: string[], api: any): string | und
   const { profilesDir } = resolvePaths();
   const activeSddAgents = Object.fromEntries(
     Object.entries(activeAgents)
-      .filter(([name, value]: any) => isManagedSddAgent(name) && typeof value?.model === "string" && value.model)
+      .filter(([name, value]: any) => isPrimarySddAgent(name) && typeof value?.model === "string" && value.model)
       .map(([name, value]: any) => [name, value.model])
   );
 
@@ -111,8 +190,98 @@ export function detectActiveProfileFile(files: string[], api: any): string | und
 }
 
 /**
+ * Returns fallback-eligible SDD base agents from config
+ */
+export function listFallbackEligibleSddAgents(config: any): string[] {
+  const agents = config?.agent || {};
+  return Object.keys(agents).filter((name) => isFallbackEligibleSddAgent(name));
+}
+
+/**
+ * Validates fallback mapping against a base config agent set
+ */
+export function validateProfileFallbackMapping(config: any, fallback: ProfileFallbackModels): string[] {
+  const errors: string[] = [];
+  const agents = config?.agent || {};
+
+  for (const [baseAgentName, model] of Object.entries(fallback || {})) {
+    if (!isFallbackEligibleSddAgent(baseAgentName)) {
+      errors.push(`Invalid fallback target '${baseAgentName}'. Must be a base sdd-* agent (excluding sdd-orchestrator).`);
+      continue;
+    }
+
+    if (!agents[baseAgentName]) {
+      errors.push(`Fallback target '${baseAgentName}' does not exist in active config.`);
+      continue;
+    }
+
+    if (typeof model !== "string" || !model.trim()) {
+      errors.push(`Fallback model for '${baseAgentName}' must be a non-empty string.`);
+    }
+  }
+
+  return errors;
+}
+
+function normalizeForFallbackCompare(agentConfig: any): any {
+  const clone = JSON.parse(JSON.stringify(agentConfig || {}));
+  delete clone.model;
+  return clone;
+}
+
+/**
+ * Ensures and reconciles sdd-*-fallback agents against base sdd-* agents
+ */
+export function syncSddFallbackAgents(currentConfig: any, fallbackModels: ProfileFallbackModels): any {
+  const nextConfig = JSON.parse(JSON.stringify(currentConfig || {}));
+  if (!nextConfig.agent) nextConfig.agent = {};
+
+  const baseAgents = listFallbackEligibleSddAgents(nextConfig);
+
+  for (const baseAgentName of baseAgents) {
+    const baseConfig = nextConfig.agent?.[baseAgentName];
+    if (!baseConfig || typeof baseConfig !== "object") continue;
+
+    const fallbackAgentName = `${baseAgentName}-fallback`;
+    const resolvedFallbackModel =
+      (typeof fallbackModels?.[baseAgentName] === "string" && fallbackModels[baseAgentName].trim())
+        ? fallbackModels[baseAgentName]
+        : baseConfig?.model;
+
+    if (!resolvedFallbackModel) continue;
+
+    const desiredFallbackConfig = {
+      ...JSON.parse(JSON.stringify(baseConfig)),
+      model: resolvedFallbackModel,
+    };
+
+    const currentFallbackConfig = nextConfig.agent[fallbackAgentName];
+
+    if (!currentFallbackConfig || typeof currentFallbackConfig !== "object") {
+      nextConfig.agent[fallbackAgentName] = desiredFallbackConfig;
+      continue;
+    }
+
+    const currentNormalized = normalizeForFallbackCompare(currentFallbackConfig);
+    const desiredNormalized = normalizeForFallbackCompare(desiredFallbackConfig);
+
+    if (JSON.stringify(currentNormalized) !== JSON.stringify(desiredNormalized)) {
+      nextConfig.agent[fallbackAgentName] = desiredFallbackConfig;
+      continue;
+    }
+
+    nextConfig.agent[fallbackAgentName] = {
+      ...currentFallbackConfig,
+      model: resolvedFallbackModel,
+    };
+  }
+
+  return nextConfig;
+}
+
+/**
  * Merges profile models into a configuration object
- * 
+ *
  * @param currentConfig - The base configuration object
  * @param profileModels - Mapping of models to apply
  * @returns Updated configuration object
@@ -132,8 +301,17 @@ function applyProfileModelsToConfig(currentConfig: any, profileModels: ProfileMo
 }
 
 /**
+ * Applies full profile data to config (primary models + fallback reconciliation)
+ */
+function applyProfileDataToConfig(currentConfig: any, profile: ProfileData): any {
+  const withPrimaryModels = applyProfileModelsToConfig(currentConfig, profile.models || {});
+  const fallbackModels = profile.fallback || {};
+  return syncSddFallbackAgents(withPrimaryModels, fallbackModels);
+}
+
+/**
  * Activates a specific profile by updating the global runtime configuration
- * 
+ *
  * @param api - The TUI API instance
  * @param profilePath - Absolute path to the profile to activate
  * @param profileName - Display name of the profile
@@ -142,7 +320,8 @@ function applyProfileModelsToConfig(currentConfig: any, profileModels: ProfileMo
 export async function activateProfileFile(api: any, profilePath: string, profileName: string): Promise<any | null> {
   const { configPath } = resolvePaths();
   try {
-    const profileModels = readProfileModels(profilePath);
+    const profileData = readProfileData(profilePath);
+    const profileModels = profileData.models || {};
 
     if (Object.keys(profileModels).length === 0) {
       api.ui.toast({
@@ -164,7 +343,13 @@ export async function activateProfileFile(api: any, profilePath: string, profile
       const globalConfigResult = await api.client.global.config.get();
       currentConfig = globalConfigResult?.data || {};
     }
-    const nextConfig = applyProfileModelsToConfig(currentConfig, profileModels);
+
+    const fallbackValidationErrors = validateProfileFallbackMapping(currentConfig, profileData.fallback || {});
+    if (fallbackValidationErrors.length > 0) {
+      throw new Error(fallbackValidationErrors.join(" | "));
+    }
+
+    const nextConfig = applyProfileDataToConfig(currentConfig, profileData);
 
     const result = await api.client.global.config.update({
       config: nextConfig,
@@ -186,7 +371,7 @@ export async function activateProfileFile(api: any, profilePath: string, profile
 
 /**
  * Lists all available profile files in the profiles directory
- * 
+ *
  * @returns Array of profile file names
  */
 export function listProfileFiles(): string[] {
@@ -201,7 +386,7 @@ export function listProfileFiles(): string[] {
 
 /**
  * Deletes a profile file from disk
- * 
+ *
  * @param fileName - Name of the file to delete
  */
 export function deleteProfileFile(fileName: string): void {
@@ -212,7 +397,7 @@ export function deleteProfileFile(fileName: string): void {
 
 /**
  * Renames an existing profile file
- * 
+ *
  * @param oldFileName - Original file name
  * @param newFileName - New file name
  */
