@@ -9,6 +9,11 @@
       "import": "./index.tsx"
     }
   },
+  "scripts": {
+    "examples": "node ./scripts/run-examples.ts",
+    "orchestrator:fallback:check": "node ./scripts/ensure-orchestrator-fallback-policy.ts --check",
+    "orchestrator:fallback:apply": "node ./scripts/ensure-orchestrator-fallback-policy.ts"
+  },
   "peerDependencies": {
     "@opencode-ai/plugin": "*",
     "@opentui/core": "*",

@@ -1,0 +1,30 @@
+{
+  "models": {
+    "sdd-init": "opencode-go/glm-5",
+    "sdd-explore": "google/gemini-3-flash-preview",
+    "sdd-propose": "anthropic/claude-sonnet-4-6",
+    "sdd-spec": "anthropic/claude-sonnet-4-6",
+    "sdd-design": "anthropic/claude-sonnet-4-6",
+    "sdd-tasks": "opencode-go/glm-5",
+    "sdd-apply": "openai/gpt-5.3-codex",
+    "sdd-java-apply": "openai/gpt-5.3-codex",
+    "sdd-react-router-7-apply": "openai/gpt-5.3-codex",
+    "sdd-verify": "opencode-go/glm-5.1",
+    "sdd-archive": "opencode-go/kimi-k2.5",
+    "sdd-onboard": "anthropic/claude-sonnet-4-6"
+  },
+  "fallback": {
+    "sdd-init": "openai/gpt-5.3-codex",
+    "sdd-explore": "openai/gpt-5.3-codex",
+    "sdd-propose": "openai/gpt-5.3-codex",
+    "sdd-spec": "openai/gpt-5.3-codex",
+    "sdd-design": "openai/gpt-5.3-codex",
+    "sdd-tasks": "openai/gpt-5.3-codex",
+    "sdd-apply": "google/gemini-3-flash-preview",
+    "sdd-java-apply": "google/gemini-3-flash-preview",
+    "sdd-react-router-7-apply": "google/gemini-3-flash-preview",
+    "sdd-verify": "openai/gpt-5.3-codex",
+    "sdd-archive": "openai/gpt-5.3-codex",
+    "sdd-onboard": "openai/gpt-5.3-codex"
+  }
+}

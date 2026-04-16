@@ -59,6 +59,28 @@ export function isManagedSddAgent(agentName: string): boolean {
 }
 
 /**
+ * Checks if an agent is a generated fallback agent
+ */
+export function isSddFallbackAgent(agentName: string): boolean {
+  return isManagedSddAgent(agentName) && agentName.endsWith("-fallback");
+}
+
+/**
+ * Checks if an agent is a primary SDD agent (non-fallback)
+ */
+export function isPrimarySddAgent(agentName: string): boolean {
+  return isManagedSddAgent(agentName) && !isSddFallbackAgent(agentName);
+}
+
+/**
+ * Checks if an agent is eligible for fallback generation
+ * (all sdd-* except orchestrator and existing fallbacks)
+ */
+export function isFallbackEligibleSddAgent(agentName: string): boolean {
+  return isPrimarySddAgent(agentName) && agentName !== "sdd-orchestrator";
+}
+
+/**
  * Resolves full model information including provider and context limit
  * 
  * @param api - The TUI API instance

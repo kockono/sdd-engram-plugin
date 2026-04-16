@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "sdd-orchestrator": {
+      "model": "openai/gpt-5.3-codex",
+      "prompt": "# Agent Teams Lite — Orchestrator Instructions\n\n## SDD Workflow\n\n<!-- gentle-ai:sdd-fallback-policy -->\n### Sub-Agent Fallback Policy (MANDATORY)\n\nWhen delegating to any base SDD executor (`sdd-*`, excluding `sdd-orchestrator` and excluding agents that already end with `-fallback`), you MUST apply this fallback policy:\n\n1. Launch the primary executor first (for example: `sdd-apply`, `sdd-spec`, `sdd-java-apply`, `sdd-react-router-7-apply`).\n2. If the primary delegation fails, returns no usable result, or times out, launch its fallback executor exactly once using the same phase context and task slice:\n   - Fallback agent name = `<primary-agent>-fallback`\n   - Example: `sdd-apply` -> `sdd-apply-fallback`\n3. A result is considered NOT usable when any of these is true:\n   - Delegation/tool error\n   - Timeout or interrupted execution\n   - Empty or missing payload\n   - Missing required phase contract fields (`status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`, `skill_resolution`)\n4. When launching a fallback agent, DO NOT override the model at orchestration-time. Let the fallback agent use the model configured in `opencode.json` for that `*-fallback` agent.\n5. If the fallback succeeds, continue the workflow normally and explicitly report that fallback was used.\n6. If both primary and fallback fail, stop that phase and return a clear failure summary with both errors.\n\nSafety rules:\n- Never chain fallback-to-fallback (`*-fallback-fallback`).\n- Maximum retries per phase: 1 primary + 1 fallback.\n- Keep all other routing rules unchanged (executor routing, strict TDD forwarding, apply-progress continuity).\n<!-- /gentle-ai:sdd-fallback-policy -->\n\n\nExisting workflow content.",
+      "mode": "primary"
+    }
+  }
+}

@@ -17,12 +17,16 @@ import {
   truncateText,
   parseActiveProfileFromRaw,
   formatContext,
+  isFallbackEligibleSddAgent,
 } from "./utils";
 import { resolvePaths, ensureProfilesDir, resolveProjectName } from "./config";
 import {
   listProfileFiles,
+  readProfileData,
   readProfileModels,
+  readProfileFallbackModels,
   writeProfileModels,
+  writeProfileFallbackModels,
   extractSddAgentModels,
   detectActiveProfileFile,
   activateProfileFile,
@@ -329,8 +333,13 @@ export function showProfileDetail(api: any, profileOpt: any) {
   const { profilesDir } = resolvePaths();
   try {
     const profilePath = path.join(profilesDir, profileOpt.value);
-    const profileModels = readProfileModels(profilePath);
-    const sddAgents = Object.entries(profileModels);
+    const profileData = readProfileData(profilePath);
+    const sddAgents = Object.entries(profileData.models || {});
+    const fallbackModelMap = profileData.fallback || {};
+    const fallbackAgents = sddAgents
+      .map(([name]) => name)
+      .filter((name) => isFallbackEligibleSddAgent(name))
+      .map((name) => [name, fallbackModelMap[name]] as [string, string | undefined]);
 
     api.ui.dialog.replace(() => (
       <api.ui.DialogSelect
@@ -339,9 +348,15 @@ export function showProfileDetail(api: any, profileOpt: any) {
           { title: `✏ Name: ${profileOpt.title}`, value: "__rename__", category: "Profile" },
           ...sddAgents.map(([name, modelId]) => ({
             title: name,
-            value: name,
+            value: `model:${name}`,
             description: resolveModelInfo(api, modelId),
             category: "Agents (Click to edit model)",
+          })),
+          ...fallbackAgents.map(([name, modelId]) => ({
+            title: `${name} -> ${name}-fallback`,
+            value: `fallback:${name}`,
+            description: modelId ? resolveModelInfo(api, modelId) : "Inherited from base model",
+            category: "Fallback Models (Click to edit model)",
           })),
           { title: "✓ Activate Profile", value: "__assign__", category: NAV_CATEGORY },
           { title: "✕ Delete Profile", value: "__delete__", category: NAV_CATEGORY },
@@ -352,7 +367,11 @@ export function showProfileDetail(api: any, profileOpt: any) {
           else if (opt.value === "__assign__") handleActivateProfile(api, profilePath, profileOpt.title);
           else if (opt.value === "__delete__") showDeleteProfile(api, profileOpt);
           else if (opt.value === "__rename__") showRenameProfile(api, profileOpt);
-          else if (!opt.value.startsWith("__")) showProviderPickerForAgent(api, profileOpt, opt.value);
+          else if (!opt.value.startsWith("__") && opt.value.startsWith("model:")) {
+            showProviderPickerForAgent(api, profileOpt, opt.value.replace("model:", ""), "model");
+          } else if (!opt.value.startsWith("__") && opt.value.startsWith("fallback:")) {
+            showProviderPickerForAgent(api, profileOpt, opt.value.replace("fallback:", ""), "fallback");
+          }
         }}
         onCancel={() => showProfileListFn(api)}
       />
@@ -449,7 +468,7 @@ function showRenameProfile(api: any, profileOpt: any) {
 /**
  * Displays a menu to select a provider for a specific agent in the profile
  */
-function showProviderPickerForAgent(api: any, profileOpt: any, agentName: string) {
+function showProviderPickerForAgent(api: any, profileOpt: any, agentName: string, mode: "model" | "fallback") {
   const providers = (api.state.provider || []).filter((p: any) => Object.keys(p.models || {}).length > 0);
 
   if (providers.length === 0) {
@@ -460,7 +479,7 @@ function showProviderPickerForAgent(api: any, profileOpt: any, agentName: string
 
   api.ui.dialog.replace(() => (
     <api.ui.DialogSelect
-      title={`Provider for ${agentName}`}
+      title={`Provider for ${agentName}${mode === "fallback" ? " (fallback)" : ""}`}
       options={[
         ...providers.map((p: any) => ({
           title: p.name || p.id,
@@ -473,7 +492,7 @@ function showProviderPickerForAgent(api: any, profileOpt: any, agentName: string
         if (opt.value === "__back__") showProfileDetailFn(api, profileOpt);
         else {
           const selected = providers.find((p: any) => p.id === opt.value);
-          showModelPickerForAgent(api, profileOpt, agentName, selected);
+          showModelPickerForAgent(api, profileOpt, agentName, selected, mode);
         }
       }}
       onCancel={() => showProfileDetailFn(api, profileOpt)}
@@ -484,13 +503,19 @@ function showProviderPickerForAgent(api: any, profileOpt: any, agentName: string
 /**
  * Displays a menu to select a model from a provider for a specific agent
  */
-function showModelPickerForAgent(api: any, profileOpt: any, agentName: string, provider: any) {
+function showModelPickerForAgent(
+  api: any,
+  profileOpt: any,
+  agentName: string,
+  provider: any,
+  mode: "model" | "fallback"
+) {
   const models = provider.models || {};
   const modelKeys = Object.keys(models);
 
   api.ui.dialog.replace(() => (
     <api.ui.DialogSelect
-      title={`${provider.name || provider.id} › ${agentName}`}
+      title={`${provider.name || provider.id} › ${agentName}${mode === "fallback" ? " (fallback)" : ""}`}
       options={[
         ...modelKeys.map((key) => {
           const model = models[key];
@@ -504,10 +529,10 @@ function showModelPickerForAgent(api: any, profileOpt: any, agentName: string, p
         { title: "← Back", value: "__back__", category: NAV_CATEGORY },
       ]}
       onSelect={(opt: any) => {
-        if (opt.value === "__back__") showProviderPickerForAgent(api, profileOpt, agentName);
-        else updateAgentModel(api, profileOpt, agentName, opt.value);
+        if (opt.value === "__back__") showProviderPickerForAgent(api, profileOpt, agentName, mode);
+        else updateAgentModel(api, profileOpt, agentName, opt.value, mode);
       }}
-      onCancel={() => showProviderPickerForAgent(api, profileOpt, agentName)}
+      onCancel={() => showProviderPickerForAgent(api, profileOpt, agentName, mode)}
     />
   ));
 }
@@ -515,15 +540,28 @@ function showModelPickerForAgent(api: any, profileOpt: any, agentName: string, p
 /**
  * Updates a specific agent's model within a profile file
  */
-function updateAgentModel(api: any, profileOpt: any, agentName: string, fullModelId: string) {
+function updateAgentModel(
+  api: any,
+  profileOpt: any,
+  agentName: string,
+  fullModelId: string,
+  mode: "model" | "fallback"
+) {
   const { profilesDir } = resolvePaths();
   const profilePath = path.join(profilesDir, profileOpt.value);
 
   try {
-    const profileModels = readProfileModels(profilePath);
-    profileModels[agentName] = fullModelId;
-    writeProfileModels(profilePath, profileModels);
-    api.ui.toast({ title: "Updated", message: `${agentName} set to ${fullModelId}`, variant: "success" });
+    if (mode === "fallback") {
+      const fallbackModels = readProfileFallbackModels(profilePath);
+      fallbackModels[agentName] = fullModelId;
+      writeProfileFallbackModels(profilePath, fallbackModels);
+      api.ui.toast({ title: "Updated", message: `${agentName} fallback set to ${fullModelId}`, variant: "success" });
+    } else {
+      const profileModels = readProfileModels(profilePath);
+      profileModels[agentName] = fullModelId;
+      writeProfileModels(profilePath, profileModels);
+      api.ui.toast({ title: "Updated", message: `${agentName} set to ${fullModelId}`, variant: "success" });
+    }
     showProfileDetailFn(api, profileOpt);
   } catch (e: any) {
     api.ui.toast({ title: "Error", message: `Failed to update agent: ${e.message}`, variant: "error" });

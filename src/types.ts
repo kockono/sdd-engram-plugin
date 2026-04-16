@@ -21,6 +21,19 @@ export type ActiveProfileState = {
 export type ProfileModels = Record<string, string>;
 
 /**
+ * Mapping of fallback model overrides by base SDD agent name
+ */
+export type ProfileFallbackModels = Record<string, string>;
+
+/**
+ * Full profile payload persisted to disk
+ */
+export type ProfileData = {
+  models: ProfileModels;
+  fallback?: ProfileFallbackModels;
+};
+
+/**
  * Represents the persistent state of profiles
  */
 export type ProfileState = {
