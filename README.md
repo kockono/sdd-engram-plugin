@@ -1,59 +1,74 @@
-# Model Selection Plugin 🚀
+# opencode-sdd-engram-manage 🚀
 
 Interactive SDD model selection and profile management for [opencode](https://opencode.ai).
 
 ## Features
 
 ### 1. SDD Profile Management
-This plugin allows you to manage [SDD (Spec-Driven Development)](https://github.com/Gentleman-Programming/gentle-ai) profiles from [gentle-ai](https://github.com/Gentleman-Programming/gentle-ai) efficiently.
 
-- **Create, Edit, & Delete:** Manage profiles linked to specific models for quick switching.
-- **Real-time Activation:** Activate profiles instantly. Changes are applied to `opencode.json` and the active runtime in real-time without needing to restart opencode, ensuring an uninterrupted workflow.
-- **Per-Agent Fallbacks:** Configure fallback models per `sdd-*` base agent (except `sdd-orchestrator`). On activation, the plugin ensures `sdd-*-fallback` agents exist and are synchronized with their base agent configuration (same config, different model).
+Manage [SDD (Spec-Driven Development)](https://github.com/Gentleman-Programming/gentle-ai) profiles from [gentle-ai](https://github.com/Gentleman-Programming/gentle-ai) directly from the opencode TUI.
+
+- **Create:** Snapshot the current `opencode.json` SDD agent configuration as a named profile.
+- **Activate:** Apply a saved profile to the global runtime config instantly — no restart required. Changes are live immediately.
+- **Edit Models:** Pick a different provider/model for any agent or fallback directly from the UI.
+- **Rename & Delete:** Full lifecycle management for your profiles.
+- **Per-Agent Fallbacks:** Configure a fallback model per `sdd-*` base agent (except `sdd-orchestrator`). On activation, the plugin ensures `sdd-*-fallback` agents exist and stay in sync with their base agent config. Primary models are applied first, so you can define new agents and their fallbacks in a single profile activation.
+- **Active Profile Detection:** The plugin automatically detects and highlights which profile matches the current config.
 
 #### Profile Format
 
-Profiles are stored as JSON files under `~/.config/opencode/profiles`:
+Profiles are stored as JSON files under `~/.config/opencode/profiles/`:
 
 ```json
 {
   "models": {
-    "sdd-init": "openai/gpt-5.3-codex",
-    "sdd-spec": "anthropic/claude-sonnet-4-6"
+    "sdd-init": "openai/gpt-4o",
+    "sdd-spec": "anthropic/claude-sonnet-4-6",
+    "sdd-apply": "anthropic/claude-sonnet-4-6"
   },
   "fallback": {
-    "sdd-init": "google/gemini-3-flash-preview"
+    "sdd-init": "google/gemini-flash-2.0",
+    "sdd-apply": "openai/gpt-4o-mini"
   }
 }
 ```
 
-- `models`: primary models for base `sdd-*` agents.
-- `fallback`: optional fallback model overrides by base agent name.
-- If a fallback model is not defined for a base agent, fallback will inherit the base agent model.
+- `models`: primary model per base `sdd-*` agent.
+- `fallback`: optional fallback model override per base agent name. If omitted, the fallback agent inherits the base model.
+
+Legacy flat format is also supported for backwards compatibility:
+
+```json
+{
+  "sdd-init": "openai/gpt-4o",
+  "sdd-apply": "anthropic/claude-sonnet-4-6"
+}
+```
+
+---
 
 ### 2. Engram Project Memories
-Full integration with the Engram memory system.
 
-- **List & Read:** Easily browse and read through your project's stored memories.
-- **Logical Deletion:** Remove memories (logically) to prevent them from affecting your current project context.
+Full integration with the [Engram](https://github.com/Gentleman-Programming/gentle-ai) memory system.
+
+- **List:** Browse all stored observations for the current project (resolved across git remote, git root, and cwd aliases).
+- **Read:** View full memory content, type, scope, and timestamp.
+- **Delete:** Logically remove a memory to prevent it from affecting the current session context.
 
 ---
 
 ## Installation
 
-To install the plugin, add it to your `tui.json` configuration file.
+Add the plugin to your `tui.json`:
 
-### Configuration Path
-If the file doesn't exist, create it at:
-`~/.config/opencode/tui.json`
-
-### Content
-Add `"opencode-sdd-engram-manage"` to the `plugin` array:
+```
+~/.config/opencode/tui.json
+```
 
 ```json
 {
-   "$schema": "https://opencode.ai/tui.json",
-   "plugin": ["opencode-sdd-engram-manage"]
+  "$schema": "https://opencode.ai/tui.json",
+  "plugin": ["opencode-sdd-engram-manage"]
 }
 ```
 
@@ -61,71 +76,87 @@ Add `"opencode-sdd-engram-manage"` to the `plugin` array:
 
 ## Usage
 
-You can open the plugin using either:
+Open the plugin with:
 
 - **Shortcut:** `Alt + K`
 - **Slash command:** `/sdd-model`
 
-### Orchestrator Fallback Policy Script
+### Workflow
 
-This repository includes a TypeScript script to ensure the `sdd-orchestrator` prompt contains the fallback policy block required to use `sdd-*-fallback` agents when a primary sub-agent fails or returns no usable response.
+1. Open the plugin (`Alt+K` or `/sdd-model`).
+2. **Create a profile** from the current config, or **Manage Profiles** to activate one.
+3. From the profile detail, click any agent to change its model (provider → model picker).
+4. Click any fallback entry to override its model.
+5. **Activate** to apply the profile to the live runtime.
 
-- Script: `scripts/ensure-orchestrator-fallback-policy.ts`
-- Supported prompt formats:
-  - Inline prompt text in `opencode.json`
-  - External prompt file reference via `{file:...}`
+---
 
-Run in check mode:
+## Orchestrator Fallback Policy Script
 
-```bash
-node ./scripts/ensure-orchestrator-fallback-policy.ts --check
-```
+This repo includes a script to ensure the `sdd-orchestrator` prompt contains the fallback policy block required for `sdd-*-fallback` agents to work correctly when a primary sub-agent fails.
 
-Apply changes:
-
-```bash
-node ./scripts/ensure-orchestrator-fallback-policy.ts
-```
-
-Optional custom config path:
+- **Script:** `scripts/ensure-orchestrator-fallback-policy.ts`
+- **Supports:** Inline prompt text in `opencode.json` and external `{file:...}` references.
 
 ```bash
+# Check mode (no changes)
+npm run orchestrator:fallback:check
+
+# Apply changes
+npm run orchestrator:fallback:apply
+
+# Custom config path
 node ./scripts/ensure-orchestrator-fallback-policy.ts --config /path/to/opencode.json
 ```
 
-You can also run the script through npm:
+---
 
-```bash
-npm run orchestrator:fallback:check
-npm run orchestrator:fallback:apply
-```
+## Example Fixtures & Smoke Validation
 
-### Example Fixtures and Smoke Validation
+Under `examples/`:
 
-The repository includes realistic fixtures under `examples/`:
+- `opencode-inline.json` — inline orchestrator prompt config
+- `opencode-external.json` + `sdd-orchestrator-example.md` — external prompt file config
+- `profiles/*.json` — profile payloads in new and legacy formats
 
-- `examples/opencode-inline.json` (inline orchestrator prompt)
-- `examples/opencode-external.json` + `examples/sdd-orchestrator-example.md` (external prompt file)
-- `examples/profiles/*.json` (profile payloads in new and legacy formats)
-
-Run the smoke validation script:
+Run smoke validation:
 
 ```bash
 npm run examples
 ```
 
-This validates:
+Validates:
+1. Fallback policy injection for inline and external prompt configs.
+2. Profile fixture readability for new (`models` + `fallback`) and legacy formats.
 
-1. Fallback policy injection for inline prompt configs.
-2. Fallback policy injection for external file prompt configs.
-3. Profile fixture readability for new (`models` + `fallback`) and legacy profile formats.
+---
+
+## Development
+
+### Running Tests
+
+```bash
+npm test
+```
+
+**Test coverage:**
+- `src/profiles.test.ts` — profile read/write, fallback sync, validation, activation logic
+- `src/memories.test.ts` — memory listing, deletion, normalization, sqlite query escaping
+- `src/utils.test.ts` — formatting helpers, agent naming predicates, model resolution
+- `src/config.test.ts` — path resolution, XDG support, project name detection
+- `scripts/ensure-orchestrator-fallback-policy.test.ts` — fallback policy injection logic
+
+### Automated Releases
+
+Uses `semantic-release` on pushes to `main`. See [docs/publish.md](docs/publish.md) for the full publish workflow and commit conventions.
 
 ---
 
 ## Technical Details
 
-- **Name:** `opencode-sdd-engram-manage`
-- **Engines:** Requires `opencode >= 1.3.13`
-- **Peer Dependencies:** `@opencode-ai/plugin`, `@opentui/core`, `@opentui/solid`, `solid-js`.
+- **Package:** `opencode-sdd-engram-manage`
+- **Current version:** see [CHANGELOG.md](CHANGELOG.md) or [npm](https://www.npmjs.com/package/opencode-sdd-engram-manage)
+- **Requires:** `opencode >= 1.3.13`
+- **Peer dependencies:** `@opencode-ai/plugin ^1.4.9`, `@opentui/core ^0.1.100`, `@opentui/solid ^0.1.100`, `solid-js`
 
 Developed by [j0k3r-dev-rgl](https://github.com/j0k3r-dev-rgl).
