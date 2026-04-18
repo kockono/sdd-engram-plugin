@@ -181,6 +181,17 @@ Validates:
 
 ## Development
 
+### Contributing
+
+Community PRs are welcome, but they must follow the repository review policy:
+
+- start from a GitHub issue
+- use a focused branch such as `feat/short_description` or `fix/short_description`
+- keep the diff as small as possible
+- justify broader changes clearly in the PR description
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and review requirements.
+
 ### Running Tests
 
 ```bash
@@ -206,5 +217,6 @@ Uses `semantic-release` on pushes to `main`. See [docs/publish.md](docs/publish.
 - **Current version:** see [CHANGELOG.md](CHANGELOG.md) or [npm](https://www.npmjs.com/package/opencode-sdd-engram-manage)
 - **Requires:** `opencode >= 1.3.13`
 - **Peer dependencies:** `@opencode-ai/plugin ^1.4.9`, `@opentui/core ^0.1.100`, `@opentui/solid ^0.1.100`, `solid-js`
+- **License:** [MIT](LICENSE)
 
 Developed by [j0k3r-dev-rgl](https://github.com/j0k3r-dev-rgl).
