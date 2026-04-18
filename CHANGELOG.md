@@ -1,3 +1,10 @@
+## [1.1.3](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/compare/v1.1.2...v1.1.3) (2026-04-18)
+
+
+### Bug Fixes
+
+* precompile plugin package before publish ([3084eac](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/commit/3084eac561e14862dc218d552b3b0fdff666d566)), closes [#8](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/issues/8)
+
 ## [1.1.2](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/compare/v1.1.1...v1.1.2) (2026-04-18)
 
 
