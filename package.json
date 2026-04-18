@@ -4,13 +4,18 @@
   "description": "Interactive SDD model selection and profile management for opencode",
   "license": "MIT",
   "type": "module",
-  "main": "index.tsx",
+  "main": "./dist/tui.js",
   "exports": {
     "./tui": {
-      "import": "./index.tsx"
+      "import": "./dist/tui.js"
     }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
+    "build": "tsup",
+    "prepack": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:fallback": "node ./scripts/test-fallback.ts",
@@ -26,7 +31,9 @@
     "@semantic-release/github": "^12.0.6",
     "@semantic-release/npm": "^13.1.5",
     "@semantic-release/release-notes-generator": "^14.1.0",
+    "esbuild-plugin-solid": "^0.6.0",
     "semantic-release": "^25.0.3",
+    "tsup": "^8.5.1",
     "vitest": "^4.1.4"
   },
   "peerDependencies": {
