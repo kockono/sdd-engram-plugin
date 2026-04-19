@@ -78,12 +78,12 @@ Add the plugin to your `tui.json`:
 
 Open the plugin with:
 
-- **Shortcut:** `Alt + K`
+- **Shortcut:** `Alt + K` (Linux/Win) or `Cmd + K` (macOS)
 - **Slash command:** `/sdd-model`
 
 ### Workflow
 
-1. Open the plugin (`Alt+K` or `/sdd-model`).
+1. Open the plugin (`Alt+K` / `Cmd+K` or `/sdd-model`).
 2. **Create a profile** for your project, or **Manage Profiles** to activate/configure one.
 3. From the profile detail, click any agent to change its model (provider → model picker).
 4. Click any fallback entry to override its model.

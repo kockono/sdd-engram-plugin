@@ -76,7 +76,7 @@ const tui: TuiPlugin = async (api) => {
     {
       title: "󰓅 SDD Profiles",
       value: "sdd-profiles",
-      keybind: "alt+k",
+      keybind: "alt+k,super+k",
       slash: { name: "sdd-model" },
       onSelect: () => showProfilesMenu(api),
     },
