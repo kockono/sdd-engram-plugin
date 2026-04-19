@@ -1,3 +1,10 @@
+## [1.1.7](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/compare/v1.1.6...v1.1.7) (2026-04-19)
+
+
+### Bug Fixes
+
+* add macOS shortcut for plugin command ([c2018b0](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/commit/c2018b04d92d741076aed8d849c2007ea35dae14)), closes [#9](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/issues/9)
+
 ## [1.1.6](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/compare/v1.1.5...v1.1.6) (2026-04-19)
 
 
