@@ -18,6 +18,7 @@ import {
   parseActiveProfileFromRaw,
   formatContext,
   isFallbackEligibleSddAgent,
+  isPrimarySddAgent,
 } from "./utils";
 import { resolvePaths, ensureProfilesDir, resolveProjectName } from "./config";
 import {
@@ -182,7 +183,7 @@ export function showProfilesMenu(api: any) {
         {
           title: "󰏪 Create New SDD Profile",
           value: "create",
-          description: "Save current configuration as a named profile.",
+          description: "Create an empty SDD profile for manual configuration.",
         },
         {
           title: "󰓅 Manage SDD Profiles",
@@ -246,26 +247,13 @@ export function showCreateProfile(api: any) {
         }
 
         try {
-          const currentConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-          const profileModels = extractSddAgentModels(currentConfig);
-
-          if (Object.keys(profileModels).length === 0) {
-            api.ui.toast({
-              title: "Error",
-              message: "No managed SDD agents with models found in current config",
-              variant: "error",
-            });
-            showProfilesMenuFn(api);
-            return;
-          }
-
-          writeProfileModels(profilePath, profileModels);
+          writeProfileModels(profilePath, {});
           api.ui.toast({
             title: "Success",
             message: `Profile '${finalName}' created successfully`,
             variant: "success",
           });
-          showProfilesMenuFn(api);
+          showProfileDetailFn(api, { title: finalName, value: fileName });
         } catch (e: any) {
           api.ui.toast({
             title: "Error",
@@ -334,10 +322,14 @@ export function showProfileDetail(api: any, profileOpt: any) {
   try {
     const profilePath = path.join(profilesDir, profileOpt.value);
     const profileData = readProfileData(profilePath);
-    const sddAgents = Object.entries(profileData.models || {});
+    const configAgents = api.state.config?.agent || {};
+    const sddAgentNames = Object.keys(configAgents)
+      .filter(isPrimarySddAgent)
+      .sort();
+
+    const sddAgents = sddAgentNames.map((name) => [name, profileData.models?.[name]] as [string, string | undefined]);
     const fallbackModelMap = profileData.fallback || {};
-    const fallbackAgents = sddAgents
-      .map(([name]) => name)
+    const fallbackAgents = sddAgentNames
       .filter((name) => isFallbackEligibleSddAgent(name))
       .map((name) => [name, fallbackModelMap[name]] as [string, string | undefined]);
 

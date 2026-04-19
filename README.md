@@ -8,7 +8,7 @@ Interactive SDD model selection and profile management for [opencode](https://op
 
 Manage [SDD (Spec-Driven Development)](https://github.com/Gentleman-Programming/gentle-ai) profiles from [gentle-ai](https://github.com/Gentleman-Programming/gentle-ai) directly from the opencode TUI.
 
-- **Create:** Snapshot the current `opencode.json` SDD agent configuration as a named profile.
+- **Create:** Create an empty SDD profile for manual configuration.
 - **Activate:** Apply a saved profile to the global runtime config instantly — no restart required. Changes are live immediately.
 - **Edit Models:** Pick a different provider/model for any agent or fallback directly from the UI.
 - **Rename & Delete:** Full lifecycle management for your profiles.
@@ -84,7 +84,7 @@ Open the plugin with:
 ### Workflow
 
 1. Open the plugin (`Alt+K` or `/sdd-model`).
-2. **Create a profile** from the current config, or **Manage Profiles** to activate one.
+2. **Create a profile** for your project, or **Manage Profiles** to activate/configure one.
 3. From the profile detail, click any agent to change its model (provider → model picker).
 4. Click any fallback entry to override its model.
 5. **Activate** to apply the profile to the live runtime.
