@@ -1,3 +1,10 @@
+## [1.1.5](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/compare/v1.1.4...v1.1.5) (2026-04-19)
+
+
+### Bug Fixes
+
+* create empty SDD profiles before configuration ([823e8a7](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/commit/823e8a71d78c5c63db6678ef01db352f38b21b52)), closes [#10](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/issues/10)
+
 ## [1.1.4](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/compare/v1.1.3...v1.1.4) (2026-04-18)
 
 
