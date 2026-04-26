@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
+import type { ProfileData } from './types';
 import { 
   extractSddAgentModels, 
   extractSddFallbackModels, 
@@ -8,7 +9,10 @@ import {
   syncSddFallbackAgents, 
   validateProfileFallbackMapping,
   isSddProfile,
-  applyProfileDataToConfig
+  applyProfileDataToConfig,
+  assignModelToUnassignedProfilePhases,
+  readProfileData,
+  writeProfileData
 } from './profiles';
 
 vi.mock('node:fs');
@@ -116,6 +120,30 @@ describe('profiles logic', () => {
     });
   });
 
+  describe('readProfileData and writeProfileData', () => {
+    it('preserves unrelated profile fields when reading and writing full profile data', () => {
+      const mockContent = JSON.stringify({
+        models: { 'sdd-init': 'gpt-4' },
+        fallback: { 'sdd-init': 'gpt-3.5' },
+        description: 'team defaults'
+      });
+      vi.mocked(fs.readFileSync).mockReturnValue(mockContent);
+
+      const profileData = readProfileData('/mock/profiles/compatible.json');
+      writeProfileData('/mock/profiles/compatible.json', profileData);
+
+      expect(profileData).toEqual({
+        models: { 'sdd-init': 'gpt-4' },
+        fallback: { 'sdd-init': 'gpt-3.5' },
+        description: 'team defaults'
+      });
+      expect(fs.writeFileSync).toHaveBeenCalledWith(
+        '/mock/profiles/compatible.json',
+        JSON.stringify(profileData, null, 2)
+      );
+    });
+  });
+
   describe('validateProfileFallbackMapping', () => {
     it('should return empty list on success', () => {
       const config = {
@@ -216,6 +244,141 @@ describe('profiles logic', () => {
       const nextConfig = applyProfileDataToConfig(config, profile);
       expect(nextConfig.agent['sdd-init'].model).toBe('claude-3');
       expect(nextConfig.agent['sdd-init-fallback'].model).toBe('gpt-3.5');
+    });
+  });
+
+  describe('assignModelToUnassignedProfilePhases', () => {
+    it('fills missing and blank primary SDD model assignments', () => {
+      const profile = {
+        models: {
+          'sdd-init': '',
+          'sdd-spec': '   ',
+          'sdd-design': 'existing/provider',
+        },
+        fallback: {}
+      };
+
+      const result = assignModelToUnassignedProfilePhases(
+        profile,
+        ['sdd-init', 'sdd-apply', 'sdd-spec', 'sdd-design'],
+        'provider/model'
+      );
+
+      expect(result.modelsAssigned).toBe(3);
+      expect(result.profile.models).toEqual({
+        'sdd-init': 'provider/model',
+        'sdd-apply': 'provider/model',
+        'sdd-spec': 'provider/model',
+        'sdd-design': 'existing/provider',
+      });
+      expect(profile.models['sdd-init']).toBe('');
+    });
+
+    it('fills missing and blank fallback entries only for fallback-eligible SDD agents', () => {
+      const profile = {
+        models: {},
+        fallback: {
+          'sdd-init': '',
+          'sdd-apply': '   ',
+          'sdd-spec': 'fallback/existing'
+        }
+      };
+
+      const result = assignModelToUnassignedProfilePhases(
+        profile,
+        ['sdd-init', 'sdd-apply', 'sdd-orchestrator', 'not-sdd'],
+        'provider/model'
+      );
+
+      expect(result.fallbackAssigned).toBe(2);
+      expect(result.profile.fallback).toEqual({
+        'sdd-init': 'provider/model',
+        'sdd-apply': 'provider/model',
+        'sdd-spec': 'fallback/existing'
+      });
+      expect(result.profile.fallback?.['sdd-orchestrator']).toBeUndefined();
+    });
+
+    it('fills primary and fallback assignments for sparse profiles without models or fallback maps', () => {
+      const result = assignModelToUnassignedProfilePhases(
+        {} as ProfileData,
+        ['sdd-init', 'sdd-apply', 'sdd-orchestrator', 'sdd-init-fallback', 'not-sdd'],
+        'provider/model'
+      );
+
+      expect(result.modelsAssigned).toBe(3);
+      expect(result.fallbackAssigned).toBe(2);
+      expect(result.profile).toEqual({
+        models: {
+          'sdd-init': 'provider/model',
+          'sdd-apply': 'provider/model',
+          'sdd-orchestrator': 'provider/model'
+        },
+        fallback: {
+          'sdd-init': 'provider/model',
+          'sdd-apply': 'provider/model'
+        }
+      });
+    });
+
+    it('preserves existing non-empty primary and fallback assignments', () => {
+      const profile = {
+        models: {
+          'sdd-init': 'primary/existing',
+          'sdd-apply': 'primary/other'
+        },
+        fallback: {
+          'sdd-init': 'fallback/existing',
+          'sdd-apply': 'fallback/other'
+        }
+      };
+
+      const result = assignModelToUnassignedProfilePhases(
+        profile,
+        ['sdd-init', 'sdd-apply'],
+        'provider/model'
+      );
+
+      expect(result.modelsAssigned).toBe(0);
+      expect(result.fallbackAssigned).toBe(0);
+      expect(result.profile).toEqual(profile);
+    });
+
+    it('ignores non-SDD agents and generated fallback agents and is idempotent', () => {
+      const first = assignModelToUnassignedProfilePhases(
+        { models: {}, fallback: {} },
+        ['sdd-init', 'sdd-init-fallback', 'sdd-orchestrator', 'general-agent'],
+        'provider/model'
+      );
+
+      expect(first.modelsAssigned).toBe(2);
+      expect(first.fallbackAssigned).toBe(1);
+      expect(first.profile.models).toEqual({
+        'sdd-init': 'provider/model',
+        'sdd-orchestrator': 'provider/model'
+      });
+      expect(first.profile.fallback).toEqual({
+        'sdd-init': 'provider/model'
+      });
+
+      const second = assignModelToUnassignedProfilePhases(
+        first.profile,
+        ['sdd-init', 'sdd-init-fallback', 'sdd-orchestrator', 'general-agent'],
+        'provider/model'
+      );
+
+      expect(second.modelsAssigned).toBe(0);
+      expect(second.fallbackAssigned).toBe(0);
+      expect(second.profile).toEqual(first.profile);
+    });
+
+    it('rejects blank model ids without changing profile data', () => {
+      const profile = { models: { 'sdd-init': '' }, fallback: {} };
+
+      expect(() =>
+        assignModelToUnassignedProfilePhases(profile, ['sdd-init'], '   ')
+      ).toThrow('modelId must be a non-empty string');
+      expect(profile.models['sdd-init']).toBe('');
     });
   });
 });

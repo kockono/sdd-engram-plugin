@@ -19,6 +19,16 @@ import {
 } from "./utils";
 import { resolvePaths, ensureProfilesDir } from "./config";
 
+export type BulkProfilePhaseAssignmentResult = {
+  profile: ProfileData;
+  modelsAssigned: number;
+  fallbackAssigned: number;
+};
+
+function isUnassignedProfileValue(value: unknown): boolean {
+  return typeof value !== "string" || value.trim().length === 0;
+}
+
 /**
  * Checks if a file name represents a valid SDD profile
  *
@@ -119,9 +129,63 @@ export function readProfileFallbackModels(profilePath: string): ProfileFallbackM
  * Reads full profile data from file (models + fallback)
  */
 export function readProfileData(profilePath: string): ProfileData {
+  const raw = JSON.parse(fs.readFileSync(profilePath, "utf-8"));
   return {
+    ...(raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}),
     models: readProfileModels(profilePath),
     fallback: readProfileFallbackModels(profilePath),
+  };
+}
+
+/**
+ * Persists full profile data while preserving the existing profile payload shape.
+ */
+export function writeProfileData(profilePath: string, profile: ProfileData): void {
+  fs.writeFileSync(profilePath, JSON.stringify(profile, null, 2));
+}
+
+/**
+ * Assigns a model to every unassigned SDD phase in a profile without overwriting
+ * existing non-empty primary or fallback assignments.
+ */
+export function assignModelToUnassignedProfilePhases(
+  profile: ProfileData,
+  primarySddAgentNames: string[],
+  modelId: string
+): BulkProfilePhaseAssignmentResult {
+  const trimmedModelId = modelId?.trim();
+  if (!trimmedModelId) {
+    throw new Error("modelId must be a non-empty string");
+  }
+
+  const nextModels: ProfileModels = { ...(profile?.models || {}) };
+  const nextFallback: ProfileFallbackModels = { ...(profile?.fallback || {}) };
+  let modelsAssigned = 0;
+  let fallbackAssigned = 0;
+
+  const primaryAgentNames = Array.from(new Set(primarySddAgentNames))
+    .filter((name) => isPrimarySddAgent(name) && !isSddFallbackAgent(name));
+
+  for (const agentName of primaryAgentNames) {
+    if (isUnassignedProfileValue(nextModels[agentName])) {
+      nextModels[agentName] = trimmedModelId;
+      modelsAssigned += 1;
+    }
+
+    if (isFallbackEligibleSddAgent(agentName) && isUnassignedProfileValue(nextFallback[agentName])) {
+      nextFallback[agentName] = trimmedModelId;
+      fallbackAssigned += 1;
+    }
+  }
+
+  return {
+    profile: {
+      ...(profile || {}),
+      models: nextModels,
+      fallback: nextFallback,
+    },
+    modelsAssigned,
+    fallbackAssigned,
   };
 }
 

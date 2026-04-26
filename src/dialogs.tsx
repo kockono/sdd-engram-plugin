@@ -26,8 +26,10 @@ import {
   readProfileData,
   readProfileModels,
   readProfileFallbackModels,
+  writeProfileData,
   writeProfileModels,
   writeProfileFallbackModels,
+  assignModelToUnassignedProfilePhases,
   extractSddAgentModels,
   detectActiveProfileFile,
   activateProfileFile,
@@ -344,6 +346,12 @@ export function showProfileDetail(api: any, profileOpt: any) {
         title={`Profile: ${profileOpt.title}`}
         options={[
           { title: `✏ Name: ${profileOpt.title}`, value: "__rename__", category: "Profile" },
+          {
+            title: "Set all phases (not set or unassigned)",
+            value: "__bulk_unassigned__",
+            description: "Choose one model for empty primary and fallback SDD phase assignments",
+            category: "Agents (Click to edit model)",
+          },
           ...sddAgents.map(([name, modelId]) => ({
             title: name,
             value: `model:${name}`,
@@ -365,6 +373,7 @@ export function showProfileDetail(api: any, profileOpt: any) {
           else if (opt.value === "__assign__") handleActivateProfile(api, profilePath, profileOpt.title);
           else if (opt.value === "__delete__") showDeleteProfile(api, profileOpt);
           else if (opt.value === "__rename__") showRenameProfile(api, profileOpt);
+          else if (opt.value === "__bulk_unassigned__") showProviderPickerForBulkProfilePhases(api, profileOpt);
           else if (!opt.value.startsWith("__") && opt.value.startsWith("model:")) {
             showProviderPickerForAgent(api, profileOpt, opt.value.replace("model:", ""), "model");
           } else if (!opt.value.startsWith("__") && opt.value.startsWith("fallback:")) {
@@ -461,6 +470,102 @@ function showRenameProfile(api: any, profileOpt: any) {
       onCancel={() => showProfileDetailFn(api, profileOpt)}
     />
   ));
+}
+
+/**
+ * Displays a menu to select a provider for bulk unassigned phase assignment.
+ */
+function showProviderPickerForBulkProfilePhases(api: any, profileOpt: any) {
+  const providers = (api.state.provider || []).filter((p: any) => Object.keys(p.models || {}).length > 0);
+
+  if (providers.length === 0) {
+    api.ui.toast({ title: "No Providers", message: "No authenticated providers found.", variant: "warning" });
+    showProfileDetailFn(api, profileOpt);
+    return;
+  }
+
+  api.ui.dialog.replace(() => (
+    <api.ui.DialogSelect
+      title="Provider for unassigned SDD phases"
+      options={[
+        ...providers.map((p: any) => ({
+          title: p.name || p.id,
+          value: p.id,
+          description: `${Object.keys(p.models || {}).length} models available`,
+        })),
+        { title: "← Back", value: "__back__", category: NAV_CATEGORY },
+      ]}
+      onSelect={(opt: any) => {
+        if (opt.value === "__back__") showProfileDetailFn(api, profileOpt);
+        else {
+          const selected = providers.find((p: any) => p.id === opt.value);
+          showModelPickerForBulkProfilePhases(api, profileOpt, selected);
+        }
+      }}
+      onCancel={() => showProfileDetailFn(api, profileOpt)}
+    />
+  ));
+}
+
+/**
+ * Displays a model picker for bulk unassigned phase assignment.
+ */
+function showModelPickerForBulkProfilePhases(api: any, profileOpt: any, provider: any) {
+  const models = provider.models || {};
+  const modelKeys = Object.keys(models);
+
+  api.ui.dialog.replace(() => (
+    <api.ui.DialogSelect
+      title={`${provider.name || provider.id} › unassigned SDD phases`}
+      options={[
+        ...modelKeys.map((key) => {
+          const model = models[key];
+          const ctxText = model.limit?.context ? formatContext(model.limit.context) : "ctx: N/A";
+          return {
+            title: model.name || key,
+            value: `${provider.id}/${key}`,
+            description: ctxText,
+          };
+        }),
+        { title: "← Back", value: "__back__", category: NAV_CATEGORY },
+      ]}
+      onSelect={(opt: any) => {
+        if (opt.value === "__back__") showProviderPickerForBulkProfilePhases(api, profileOpt);
+        else updateUnassignedProfilePhases(api, profileOpt, opt.value);
+      }}
+      onCancel={() => showProviderPickerForBulkProfilePhases(api, profileOpt)}
+    />
+  ));
+}
+
+/**
+ * Assigns the selected model to unassigned primary and fallback SDD profile phases.
+ */
+function updateUnassignedProfilePhases(api: any, profileOpt: any, fullModelId: string) {
+  const { profilesDir } = resolvePaths();
+  const profilePath = path.join(profilesDir, profileOpt.value);
+
+  try {
+    const profileData = readProfileData(profilePath);
+    const primarySddAgentNames = Object.keys(api.state.config?.agent || {}).filter(isPrimarySddAgent);
+    const result = assignModelToUnassignedProfilePhases(profileData, primarySddAgentNames, fullModelId);
+
+    writeProfileData(profilePath, result.profile);
+
+    const totalAssigned = result.modelsAssigned + result.fallbackAssigned;
+    api.ui.toast({
+      title: totalAssigned > 0 ? "Updated" : "No Changes",
+      message:
+        totalAssigned > 0
+          ? `Set ${result.modelsAssigned} primary and ${result.fallbackAssigned} fallback unassigned phases to ${fullModelId}`
+          : "No unassigned SDD primary or fallback phases required updates",
+      variant: totalAssigned > 0 ? "success" : "warning",
+    });
+    showProfileDetailFn(api, profileOpt);
+  } catch (e: any) {
+    api.ui.toast({ title: "Error", message: `Failed to update phases: ${e.message}`, variant: "error" });
+    showProfileDetailFn(api, profileOpt);
+  }
 }
 
 /**
