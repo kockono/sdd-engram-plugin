@@ -19,6 +19,7 @@ import { execFileSync } from "node:child_process";
 export type Paths = {
   configRoot: string;
   profilesDir: string;
+  profileVersionsDir: string;
   configPath: string;
   backupPath: string;
 };
@@ -36,6 +37,7 @@ export function resolvePaths(): Paths {
   return {
     configRoot,
     profilesDir: path.join(configRoot, "profiles"),
+    profileVersionsDir: path.join(configRoot, "profile-versions"),
     configPath: path.join(configRoot, "opencode.json"),
     backupPath: path.join(configRoot, "opencode.json.bak"),
   };

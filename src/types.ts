@@ -33,6 +33,87 @@ export type ProfileData = {
   fallback?: ProfileFallbackModels;
 };
 
+export const BULK_ASSIGNMENT_TARGET = {
+  PRIMARY: "primary",
+  FALLBACK: "fallback",
+  BOTH: "both",
+} as const;
+
+export type BulkAssignmentTarget = (typeof BULK_ASSIGNMENT_TARGET)[keyof typeof BULK_ASSIGNMENT_TARGET];
+
+export const BULK_ASSIGNMENT_MODE = {
+  FILL_ONLY: "fill-only",
+  OVERWRITE: "overwrite",
+} as const;
+
+export type BulkAssignmentMode = (typeof BULK_ASSIGNMENT_MODE)[keyof typeof BULK_ASSIGNMENT_MODE];
+
+export type BulkAssignmentOperation = {
+  target: BulkAssignmentTarget;
+  mode: BulkAssignmentMode;
+};
+
+export const PROFILE_VERSION_SOURCE = {
+  BULK: "bulk",
+  PHASE: "phase",
+} as const;
+
+export type ProfileVersionSource = (typeof PROFILE_VERSION_SOURCE)[keyof typeof PROFILE_VERSION_SOURCE];
+
+export const PROFILE_PHASE_MODEL_FIELD = {
+  PRIMARY: "primary",
+  FALLBACK: "fallback",
+} as const;
+
+export type ProfilePhaseModelField = (typeof PROFILE_PHASE_MODEL_FIELD)[keyof typeof PROFILE_PHASE_MODEL_FIELD];
+
+export type BulkProfileVersionOperation = BulkAssignmentOperation & {
+  source: typeof PROFILE_VERSION_SOURCE.BULK;
+  changedPhases?: number;
+};
+
+export type PhaseProfileVersionOperation = {
+  source: typeof PROFILE_VERSION_SOURCE.PHASE;
+  phase: string;
+  field: ProfilePhaseModelField;
+  modelId: string;
+  changedPhases: 1;
+};
+
+export type ProfileVersionOperation = BulkProfileVersionOperation | PhaseProfileVersionOperation;
+
+export type BulkProfilePhaseAssignmentResult = {
+  profile: ProfileData;
+  modelsAssigned: number;
+  fallbackAssigned: number;
+  changed: boolean;
+};
+
+export type ProfileVersionPreview = {
+  models: ProfileModels;
+  fallback: ProfileFallbackModels;
+};
+
+export type ProfileVersion = {
+  version: 1;
+  id: string;
+  profileFile: string;
+  createdAt: string;
+  source: ProfileVersionSource;
+  operation: ProfileVersionOperation;
+  operationSummary: string;
+  beforeRaw: string;
+  preview: ProfileVersionPreview;
+};
+
+export type UpdateProfilePhaseModelResult = {
+  profile: ProfileData;
+  changed: boolean;
+  version?: ProfileVersion;
+};
+
+export type ProfileVersionMetadata = Omit<ProfileVersion, "beforeRaw">;
+
 /**
  * Represents the persistent state of profiles
  */

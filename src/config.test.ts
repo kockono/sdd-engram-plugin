@@ -22,6 +22,7 @@ describe('config logic', () => {
       try {
         const paths = resolvePaths();
         expect(paths.configRoot).toBe(path.join('/home/user', '.config', 'opencode'));
+        expect(paths.profileVersionsDir).toBe(path.join('/home/user', '.config', 'opencode', 'profile-versions'));
       } finally {
         process.env = originalEnv;
       }
@@ -35,6 +36,7 @@ describe('config logic', () => {
       try {
         const paths = resolvePaths();
         expect(paths.configRoot).toBe(path.join('/custom/config', 'opencode'));
+        expect(paths.profileVersionsDir).toBe(path.join('/custom/config', 'opencode', 'profile-versions'));
       } finally {
         process.env = originalEnv;
       }

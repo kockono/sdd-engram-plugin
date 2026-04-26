@@ -10,7 +10,24 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ProfileData, ProfileFallbackModels, ProfileModels } from "./types";
+import {
+  BULK_ASSIGNMENT_MODE,
+  BULK_ASSIGNMENT_TARGET,
+  BulkAssignmentOperation,
+  BulkProfileVersionOperation,
+  PhaseProfileVersionOperation,
+  PROFILE_PHASE_MODEL_FIELD,
+  PROFILE_VERSION_SOURCE,
+  ProfilePhaseModelField,
+  BulkProfilePhaseAssignmentResult,
+  ProfileData,
+  ProfileFallbackModels,
+  ProfileModels,
+  ProfileVersion,
+  ProfileVersionMetadata,
+  ProfileVersionOperation,
+  UpdateProfilePhaseModelResult,
+} from "./types";
 import {
   isManagedSddAgent,
   isFallbackEligibleSddAgent,
@@ -19,11 +36,8 @@ import {
 } from "./utils";
 import { resolvePaths, ensureProfilesDir } from "./config";
 
-export type BulkProfilePhaseAssignmentResult = {
-  profile: ProfileData;
-  modelsAssigned: number;
-  fallbackAssigned: number;
-};
+const PROFILE_VERSION_FORMAT = 1;
+const DEFAULT_PROFILE_VERSION_RETENTION = 30;
 
 function isUnassignedProfileValue(value: unknown): boolean {
   return typeof value !== "string" || value.trim().length === 0;
@@ -144,14 +158,123 @@ export function writeProfileData(profilePath: string, profile: ProfileData): voi
   fs.writeFileSync(profilePath, JSON.stringify(profile, null, 2));
 }
 
+function normalizePrimarySddAgentNames(primarySddAgentNames: string[]): string[] {
+  return Array.from(new Set(primarySddAgentNames))
+    .filter((name) => isPrimarySddAgent(name) && !isSddFallbackAgent(name));
+}
+
+function shouldAssignValue(currentValue: unknown, mode: string): boolean {
+  return mode === BULK_ASSIGNMENT_MODE.OVERWRITE || isUnassignedProfileValue(currentValue);
+}
+
+function safeProfileFileName(profilePathOrFile: string): string {
+  const fileName = path.basename(profilePathOrFile);
+  if (!isSddProfile(fileName) || fileName.includes("..") || fileName.includes("/") || fileName.includes("\\")) {
+    throw new Error("Invalid profile file name");
+  }
+  return fileName;
+}
+
+function resolveProfileVersionDir(profilePathOrFile: string): string {
+  const { profileVersionsDir } = resolvePaths();
+  return path.join(profileVersionsDir, safeProfileFileName(profilePathOrFile));
+}
+
+function sanitizeTimestampForFileName(value: string): string {
+  return value.replace(/[:.]/g, "-");
+}
+
+function parseVersionId(versionId: string): { profileFile: string; versionFile: string } {
+  const parts = versionId.split("/");
+  if (parts.length !== 2) throw new Error("Invalid profile version id");
+  const [profileFile, versionFile] = parts;
+  try {
+    if (profileFile !== safeProfileFileName(profileFile)) throw new Error("Invalid profile version id");
+  } catch {
+    throw new Error("Invalid profile version id");
+  }
+  if (path.basename(versionFile) !== versionFile || !versionFile.endsWith(".json") || versionFile.includes("..")) {
+    throw new Error("Invalid profile version id");
+  }
+  return { profileFile, versionFile };
+}
+
+function resolveProfileVersionPath(versionId: string): string {
+  const { profileFile, versionFile } = parseVersionId(versionId);
+  return path.join(resolveProfileVersionDir(profileFile), versionFile);
+}
+
+function atomicWriteFile(filePath: string, content: string): void {
+  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmpPath, content);
+  fs.renameSync(tmpPath, filePath);
+}
+
+function buildOperationSummary(operation: BulkAssignmentOperation, modelsAssigned: number, fallbackAssigned: number): string {
+  const action = operation.mode === BULK_ASSIGNMENT_MODE.OVERWRITE ? "Override" : "Set";
+  const target = operation.target === BULK_ASSIGNMENT_TARGET.BOTH
+    ? "all phases and fallbacks"
+    : operation.target === BULK_ASSIGNMENT_TARGET.PRIMARY
+      ? "all primary phases"
+      : "all fallback phases";
+  return `${action} ${target}: ${modelsAssigned} primary, ${fallbackAssigned} fallback`;
+}
+
+function normalizeBulkVersionOperation(
+  operation: BulkAssignmentOperation | BulkProfileVersionOperation,
+  changedPhases?: number
+): BulkProfileVersionOperation {
+  return {
+    ...operation,
+    source: PROFILE_VERSION_SOURCE.BULK,
+    ...(typeof changedPhases === "number" ? { changedPhases } : {}),
+  };
+}
+
+function normalizeProfileVersionOperation(operation: BulkAssignmentOperation | ProfileVersionOperation): ProfileVersionOperation {
+  if ((operation as ProfileVersionOperation).source === PROFILE_VERSION_SOURCE.PHASE) {
+    return operation as PhaseProfileVersionOperation;
+  }
+  return normalizeBulkVersionOperation(operation as BulkAssignmentOperation | BulkProfileVersionOperation);
+}
+
+function normalizeProfileVersion(parsed: any, versionId: string): ProfileVersion {
+  const operation = normalizeProfileVersionOperation(parsed.operation || {});
+  const source = parsed.source === PROFILE_VERSION_SOURCE.PHASE ? PROFILE_VERSION_SOURCE.PHASE : PROFILE_VERSION_SOURCE.BULK;
+  return {
+    ...parsed,
+    source,
+    operation,
+    id: versionId,
+  };
+}
+
+function buildPhaseOperationSummary(agentName: string, field: ProfilePhaseModelField, modelId: string): string {
+  return `Set ${agentName} ${field} model to ${modelId}`;
+}
+
+function readProfilePreviewFromRaw(beforeRaw: string): { models: ProfileModels; fallback: ProfileFallbackModels } {
+  const raw = JSON.parse(beforeRaw);
+  return {
+    models: raw && typeof raw === "object" && !Array.isArray(raw)
+      ? raw.models && typeof raw.models === "object" && !Array.isArray(raw.models)
+        ? Object.fromEntries(
+            Object.entries(raw.models).filter(([name, value]: any) => isPrimarySddAgent(name) && typeof value === "string")
+          )
+        : extractSddAgentModels(raw)
+      : {},
+    fallback: extractSddFallbackModels(raw),
+  };
+}
+
 /**
- * Assigns a model to every unassigned SDD phase in a profile without overwriting
- * existing non-empty primary or fallback assignments.
+ * Applies a bulk profile assignment for the selected target/mode without mutating input.
  */
-export function assignModelToUnassignedProfilePhases(
+export function applyBulkProfilePhaseAssignment(
   profile: ProfileData,
   primarySddAgentNames: string[],
-  modelId: string
+  modelId: string,
+  operation: BulkAssignmentOperation
 ): BulkProfilePhaseAssignmentResult {
   const trimmedModelId = modelId?.trim();
   if (!trimmedModelId) {
@@ -160,21 +283,29 @@ export function assignModelToUnassignedProfilePhases(
 
   const nextModels: ProfileModels = { ...(profile?.models || {}) };
   const nextFallback: ProfileFallbackModels = { ...(profile?.fallback || {}) };
+  const primaryAgentNames = normalizePrimarySddAgentNames(primarySddAgentNames);
   let modelsAssigned = 0;
   let fallbackAssigned = 0;
+  let changed = false;
 
-  const primaryAgentNames = Array.from(new Set(primarySddAgentNames))
-    .filter((name) => isPrimarySddAgent(name) && !isSddFallbackAgent(name));
+  const shouldAssignPrimary = operation.target === BULK_ASSIGNMENT_TARGET.PRIMARY || operation.target === BULK_ASSIGNMENT_TARGET.BOTH;
+  const shouldAssignFallback = operation.target === BULK_ASSIGNMENT_TARGET.FALLBACK || operation.target === BULK_ASSIGNMENT_TARGET.BOTH;
 
   for (const agentName of primaryAgentNames) {
-    if (isUnassignedProfileValue(nextModels[agentName])) {
-      nextModels[agentName] = trimmedModelId;
-      modelsAssigned += 1;
+    if (shouldAssignPrimary && shouldAssignValue(nextModels[agentName], operation.mode)) {
+      if (nextModels[agentName] !== trimmedModelId) {
+        nextModels[agentName] = trimmedModelId;
+        modelsAssigned += 1;
+        changed = true;
+      }
     }
 
-    if (isFallbackEligibleSddAgent(agentName) && isUnassignedProfileValue(nextFallback[agentName])) {
-      nextFallback[agentName] = trimmedModelId;
-      fallbackAssigned += 1;
+    if (shouldAssignFallback && isFallbackEligibleSddAgent(agentName) && shouldAssignValue(nextFallback[agentName], operation.mode)) {
+      if (nextFallback[agentName] !== trimmedModelId) {
+        nextFallback[agentName] = trimmedModelId;
+        fallbackAssigned += 1;
+        changed = true;
+      }
     }
   }
 
@@ -186,7 +317,167 @@ export function assignModelToUnassignedProfilePhases(
     },
     modelsAssigned,
     fallbackAssigned,
+    changed,
   };
+}
+
+/**
+ * Assigns a model to every unassigned SDD phase in a profile without overwriting
+ * existing non-empty primary or fallback assignments.
+ */
+export function assignModelToUnassignedProfilePhases(
+  profile: ProfileData,
+  primarySddAgentNames: string[],
+  modelId: string
+): BulkProfilePhaseAssignmentResult {
+  return applyBulkProfilePhaseAssignment(profile, primarySddAgentNames, modelId, {
+    target: BULK_ASSIGNMENT_TARGET.BOTH,
+    mode: BULK_ASSIGNMENT_MODE.FILL_ONLY,
+  });
+}
+
+function pruneProfileVersions(profileFile: string, retention: number): void {
+  const versionDir = resolveProfileVersionDir(profileFile);
+  if (!fs.existsSync(versionDir)) return;
+  const files = fs.readdirSync(versionDir).filter((file) => String(file).endsWith(".json")).sort().reverse();
+  for (const staleFile of files.slice(retention)) {
+    fs.unlinkSync(path.join(versionDir, staleFile));
+  }
+}
+
+export function createProfileVersion(
+  profilePath: string,
+  operation: BulkAssignmentOperation | ProfileVersionOperation,
+  operationSummary: string,
+  retention = DEFAULT_PROFILE_VERSION_RETENTION
+): ProfileVersion {
+  const profileFile = safeProfileFileName(profilePath);
+  const versionDir = resolveProfileVersionDir(profileFile);
+  if (!fs.existsSync(versionDir)) fs.mkdirSync(versionDir, { recursive: true });
+
+  const beforeRaw = fs.readFileSync(profilePath, "utf-8").toString();
+  const createdAt = new Date().toISOString();
+  const versionFile = `${sanitizeTimestampForFileName(createdAt)}-${Math.random().toString(36).slice(2, 8)}.json`;
+  const id = `${profileFile}/${versionFile}`;
+  const versionOperation = normalizeProfileVersionOperation(operation);
+  const version: ProfileVersion = {
+    version: PROFILE_VERSION_FORMAT,
+    id,
+    profileFile,
+    createdAt,
+    source: versionOperation.source,
+    operation: versionOperation,
+    operationSummary,
+    beforeRaw,
+    preview: readProfilePreviewFromRaw(beforeRaw),
+  };
+
+  const versionPath = path.join(versionDir, versionFile);
+  atomicWriteFile(versionPath, JSON.stringify(version, null, 2));
+  pruneProfileVersions(profileFile, retention);
+  return version;
+}
+
+export function readProfileVersion(versionId: string): ProfileVersion {
+  const versionPath = resolveProfileVersionPath(versionId);
+  if (!fs.existsSync(versionPath)) throw new Error("Profile version not found");
+  const parsed = JSON.parse(fs.readFileSync(versionPath, "utf-8").toString());
+  if (parsed?.version !== PROFILE_VERSION_FORMAT || parsed?.id !== versionId || parsed?.profileFile !== parseVersionId(versionId).profileFile) {
+    throw new Error("Invalid profile version data");
+  }
+  return normalizeProfileVersion(parsed, versionId);
+}
+
+export function listProfileVersions(profilePathOrFile: string): ProfileVersionMetadata[] {
+  const profileFile = safeProfileFileName(profilePathOrFile);
+  const versionDir = resolveProfileVersionDir(profileFile);
+  if (!fs.existsSync(versionDir)) return [];
+
+  return fs.readdirSync(versionDir)
+    .filter((file) => String(file).endsWith(".json"))
+    .map((file) => readProfileVersion(`${profileFile}/${file}`))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map(({ beforeRaw, ...metadata }) => metadata);
+}
+
+export function restoreProfileVersion(profilePathOrFile: string, versionId: string): ProfileVersion {
+  const profileFile = safeProfileFileName(profilePathOrFile);
+  const version = readProfileVersion(versionId);
+  if (version.profileFile !== profileFile) {
+    throw new Error("Profile version does not match selected profile");
+  }
+  JSON.parse(version.beforeRaw);
+  const { profilesDir } = resolvePaths();
+  fs.writeFileSync(path.join(profilesDir, profileFile), version.beforeRaw);
+  return version;
+}
+
+export function updateProfileWithBulkPhaseAssignment(
+  profilePath: string,
+  primarySddAgentNames: string[],
+  modelId: string,
+  operation: BulkAssignmentOperation
+): { assignment: BulkProfilePhaseAssignmentResult; version?: ProfileVersion } {
+  const profileData = readProfileData(profilePath);
+  const assignment = applyBulkProfilePhaseAssignment(profileData, primarySddAgentNames, modelId, operation);
+  if (!assignment.changed) return { assignment };
+
+  const version = createProfileVersion(
+    profilePath,
+    normalizeBulkVersionOperation(operation, assignment.modelsAssigned + assignment.fallbackAssigned),
+    buildOperationSummary(operation, assignment.modelsAssigned, assignment.fallbackAssigned)
+  );
+  writeProfileData(profilePath, assignment.profile);
+  return { assignment, version };
+}
+
+export function updateProfilePhaseModel(
+  profilePath: string,
+  agentName: string,
+  field: ProfilePhaseModelField,
+  modelId: string
+): UpdateProfilePhaseModelResult {
+  const trimmedModelId = modelId?.trim();
+  if (!trimmedModelId) {
+    throw new Error("modelId must be a non-empty string");
+  }
+  if (!isPrimarySddAgent(agentName) || isSddFallbackAgent(agentName)) {
+    throw new Error("agentName must be a primary SDD agent");
+  }
+  if (field === PROFILE_PHASE_MODEL_FIELD.FALLBACK && !isFallbackEligibleSddAgent(agentName)) {
+    throw new Error("agentName is not eligible for fallback models");
+  }
+
+  const profileData = readProfileData(profilePath);
+  const currentValue = field === PROFILE_PHASE_MODEL_FIELD.FALLBACK
+    ? profileData.fallback?.[agentName]
+    : profileData.models?.[agentName];
+  if (currentValue === trimmedModelId) {
+    return { profile: profileData, changed: false };
+  }
+
+  const nextProfile: ProfileData = {
+    ...profileData,
+    models: { ...(profileData.models || {}) },
+    fallback: { ...(profileData.fallback || {}) },
+  };
+
+  if (field === PROFILE_PHASE_MODEL_FIELD.FALLBACK) {
+    nextProfile.fallback = { ...(nextProfile.fallback || {}), [agentName]: trimmedModelId };
+  } else {
+    nextProfile.models = { ...(nextProfile.models || {}), [agentName]: trimmedModelId };
+  }
+
+  const operation: PhaseProfileVersionOperation = {
+    source: PROFILE_VERSION_SOURCE.PHASE,
+    phase: agentName,
+    field,
+    modelId: trimmedModelId,
+    changedPhases: 1,
+  };
+  const version = createProfileVersion(profilePath, operation, buildPhaseOperationSummary(agentName, field, trimmedModelId));
+  writeProfileData(profilePath, nextProfile);
+  return { profile: nextProfile, changed: true, version };
 }
 
 /**

@@ -10,7 +10,15 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { NAV_CATEGORY } from "./types";
+import {
+  BULK_ASSIGNMENT_MODE,
+  BULK_ASSIGNMENT_TARGET,
+  BulkAssignmentOperation,
+  PROFILE_VERSION_SOURCE,
+  ProfileVersion,
+  ProfileVersionMetadata,
+  NAV_CATEGORY,
+} from "./types";
 import {
   resolveModelInfo,
   formatMemoryDate,
@@ -26,11 +34,12 @@ import {
   readProfileData,
   readProfileModels,
   readProfileFallbackModels,
-  writeProfileData,
   writeProfileModels,
-  writeProfileFallbackModels,
-  assignModelToUnassignedProfilePhases,
-  extractSddAgentModels,
+  updateProfileWithBulkPhaseAssignment,
+  updateProfilePhaseModel,
+  listProfileVersions,
+  readProfileVersion,
+  restoreProfileVersion,
   detectActiveProfileFile,
   activateProfileFile,
   deleteProfileFile,
@@ -154,6 +163,80 @@ let showProfilesMenuFn: (api: any) => void;
 let showProfileListFn: (api: any) => void;
 let showProfileDetailFn: (api: any, profileOpt: any) => void;
 let showProjectMemoriesMenuFn: (api: any) => void;
+
+export type BulkProfileActionOption = {
+  title: string;
+  value: string;
+  operation: BulkAssignmentOperation;
+  requiresConfirmation: boolean;
+};
+
+export function buildBulkProfileActionOptions(): BulkProfileActionOption[] {
+  return [
+    {
+      title: "Set all primary phases",
+      value: "bulk:fill-only:primary",
+      operation: { target: BULK_ASSIGNMENT_TARGET.PRIMARY, mode: BULK_ASSIGNMENT_MODE.FILL_ONLY },
+      requiresConfirmation: false,
+    },
+    {
+      title: "Set all fallback phases",
+      value: "bulk:fill-only:fallback",
+      operation: { target: BULK_ASSIGNMENT_TARGET.FALLBACK, mode: BULK_ASSIGNMENT_MODE.FILL_ONLY },
+      requiresConfirmation: false,
+    },
+    {
+      title: "Set all phases and fallbacks",
+      value: "bulk:fill-only:both",
+      operation: { target: BULK_ASSIGNMENT_TARGET.BOTH, mode: BULK_ASSIGNMENT_MODE.FILL_ONLY },
+      requiresConfirmation: false,
+    },
+    {
+      title: "Override all primary phases",
+      value: "bulk:overwrite:primary",
+      operation: { target: BULK_ASSIGNMENT_TARGET.PRIMARY, mode: BULK_ASSIGNMENT_MODE.OVERWRITE },
+      requiresConfirmation: true,
+    },
+    {
+      title: "Override all fallback phases",
+      value: "bulk:overwrite:fallback",
+      operation: { target: BULK_ASSIGNMENT_TARGET.FALLBACK, mode: BULK_ASSIGNMENT_MODE.OVERWRITE },
+      requiresConfirmation: true,
+    },
+    {
+      title: "Override all phases and fallbacks",
+      value: "bulk:overwrite:both",
+      operation: { target: BULK_ASSIGNMENT_TARGET.BOTH, mode: BULK_ASSIGNMENT_MODE.OVERWRITE },
+      requiresConfirmation: true,
+    },
+  ];
+}
+
+export function formatProfileVersionPreviewLines(version: ProfileVersion): string[] {
+  const primaryLines = Object.entries(version.preview.models || {}).map(([name, model]) => `Primary: ${name} -> ${model}`);
+  const fallbackLines = Object.entries(version.preview.fallback || {}).map(([name, model]) => `Fallback: ${name} -> ${model}`);
+  return [
+    `Profile: ${version.profileFile}`,
+    `Created: ${formatMemoryDate(version.createdAt)}`,
+    `Source: ${formatProfileVersionSource(version.source)}`,
+    `Operation: ${version.operationSummary}`,
+    ...(primaryLines.length > 0 ? primaryLines : ["Primary: none"]),
+    ...(fallbackLines.length > 0 ? fallbackLines : ["Fallback: none"]),
+    `Raw: ${truncateText(version.beforeRaw.replace(/\s+/g, " "), 80)}`,
+  ];
+}
+
+function formatProfileVersionSource(source: string | undefined): string {
+  return source === PROFILE_VERSION_SOURCE.PHASE ? "Phase" : "Bulk";
+}
+
+export function buildProfileVersionListOption(version: ProfileVersionMetadata): { title: string; value: string; description: string } {
+  return {
+    title: `${formatMemoryDate(version.createdAt)} · ${formatProfileVersionSource(version.source)}`,
+    value: version.id,
+    description: version.operationSummary,
+  };
+}
 
 /**
  * Registers callback functions for cross-dialog navigation
@@ -347,10 +430,16 @@ export function showProfileDetail(api: any, profileOpt: any) {
         options={[
           { title: `✏ Name: ${profileOpt.title}`, value: "__rename__", category: "Profile" },
           {
-            title: "Set all phases (not set or unassigned)",
-            value: "__bulk_unassigned__",
-            description: "Choose one model for empty primary and fallback SDD phase assignments",
+            title: "Bulk actions...",
+            value: "__bulk_actions__",
+            description: "Fill or override primary and fallback SDD phase assignments",
             category: "Agents (Click to edit model)",
+          },
+          {
+            title: "Profile versions...",
+            value: "__profile_versions__",
+            description: "Preview and restore previous profile versions",
+            category: "Profile",
           },
           ...sddAgents.map(([name, modelId]) => ({
             title: name,
@@ -373,7 +462,8 @@ export function showProfileDetail(api: any, profileOpt: any) {
           else if (opt.value === "__assign__") handleActivateProfile(api, profilePath, profileOpt.title);
           else if (opt.value === "__delete__") showDeleteProfile(api, profileOpt);
           else if (opt.value === "__rename__") showRenameProfile(api, profileOpt);
-          else if (opt.value === "__bulk_unassigned__") showProviderPickerForBulkProfilePhases(api, profileOpt);
+          else if (opt.value === "__bulk_actions__") showBulkProfileActions(api, profileOpt);
+          else if (opt.value === "__profile_versions__") showProfileVersions(api, profileOpt);
           else if (!opt.value.startsWith("__") && opt.value.startsWith("model:")) {
             showProviderPickerForAgent(api, profileOpt, opt.value.replace("model:", ""), "model");
           } else if (!opt.value.startsWith("__") && opt.value.startsWith("fallback:")) {
@@ -473,20 +563,62 @@ function showRenameProfile(api: any, profileOpt: any) {
 }
 
 /**
- * Displays a menu to select a provider for bulk unassigned phase assignment.
+ * Displays bulk assignment actions for the selected profile.
  */
-function showProviderPickerForBulkProfilePhases(api: any, profileOpt: any) {
+function showBulkProfileActions(api: any, profileOpt: any) {
+  const options = buildBulkProfileActionOptions();
+
+  api.ui.dialog.replace(() => (
+    <api.ui.DialogSelect
+      title="Bulk profile actions"
+      options={[
+        ...options.map((option) => ({
+          title: option.title,
+          value: option.value,
+          description: option.requiresConfirmation ? "Requires confirmation before overwriting" : "Fill only empty or unassigned entries",
+        })),
+        { title: "← Back", value: "__back__", category: NAV_CATEGORY },
+      ]}
+      onSelect={(opt: any) => {
+        if (opt.value === "__back__") showProfileDetailFn(api, profileOpt);
+        else {
+          const selected = options.find((option) => option.value === opt.value);
+          if (!selected) return;
+          if (selected.requiresConfirmation) showConfirmBulkProfileOverride(api, profileOpt, selected);
+          else showProviderPickerForBulkProfilePhases(api, profileOpt, selected);
+        }
+      }}
+      onCancel={() => showProfileDetailFn(api, profileOpt)}
+    />
+  ));
+}
+
+function showConfirmBulkProfileOverride(api: any, profileOpt: any, action: BulkProfileActionOption) {
+  api.ui.dialog.replace(() => (
+    <api.ui.DialogConfirm
+      title="Confirm bulk override"
+      message={`${action.title} will replace existing targeted assignments in '${profileOpt.title}'. A dated version will be saved first.`}
+      onConfirm={() => showProviderPickerForBulkProfilePhases(api, profileOpt, action)}
+      onCancel={() => showBulkProfileActions(api, profileOpt)}
+    />
+  ));
+}
+
+/**
+ * Displays a menu to select a provider for bulk phase assignment.
+ */
+function showProviderPickerForBulkProfilePhases(api: any, profileOpt: any, action: BulkProfileActionOption) {
   const providers = (api.state.provider || []).filter((p: any) => Object.keys(p.models || {}).length > 0);
 
   if (providers.length === 0) {
     api.ui.toast({ title: "No Providers", message: "No authenticated providers found.", variant: "warning" });
-    showProfileDetailFn(api, profileOpt);
+    showBulkProfileActions(api, profileOpt);
     return;
   }
 
   api.ui.dialog.replace(() => (
     <api.ui.DialogSelect
-      title="Provider for unassigned SDD phases"
+      title={`Provider › ${action.title}`}
       options={[
         ...providers.map((p: any) => ({
           title: p.name || p.id,
@@ -496,27 +628,27 @@ function showProviderPickerForBulkProfilePhases(api: any, profileOpt: any) {
         { title: "← Back", value: "__back__", category: NAV_CATEGORY },
       ]}
       onSelect={(opt: any) => {
-        if (opt.value === "__back__") showProfileDetailFn(api, profileOpt);
+        if (opt.value === "__back__") showBulkProfileActions(api, profileOpt);
         else {
           const selected = providers.find((p: any) => p.id === opt.value);
-          showModelPickerForBulkProfilePhases(api, profileOpt, selected);
+          showModelPickerForBulkProfilePhases(api, profileOpt, selected, action);
         }
       }}
-      onCancel={() => showProfileDetailFn(api, profileOpt)}
+      onCancel={() => showBulkProfileActions(api, profileOpt)}
     />
   ));
 }
 
 /**
- * Displays a model picker for bulk unassigned phase assignment.
+ * Displays a model picker for bulk phase assignment.
  */
-function showModelPickerForBulkProfilePhases(api: any, profileOpt: any, provider: any) {
+function showModelPickerForBulkProfilePhases(api: any, profileOpt: any, provider: any, action: BulkProfileActionOption) {
   const models = provider.models || {};
   const modelKeys = Object.keys(models);
 
   api.ui.dialog.replace(() => (
     <api.ui.DialogSelect
-      title={`${provider.name || provider.id} › unassigned SDD phases`}
+      title={`${provider.name || provider.id} › ${action.title}`}
       options={[
         ...modelKeys.map((key) => {
           const model = models[key];
@@ -530,35 +662,32 @@ function showModelPickerForBulkProfilePhases(api: any, profileOpt: any, provider
         { title: "← Back", value: "__back__", category: NAV_CATEGORY },
       ]}
       onSelect={(opt: any) => {
-        if (opt.value === "__back__") showProviderPickerForBulkProfilePhases(api, profileOpt);
-        else updateUnassignedProfilePhases(api, profileOpt, opt.value);
+        if (opt.value === "__back__") showProviderPickerForBulkProfilePhases(api, profileOpt, action);
+        else updateBulkProfilePhases(api, profileOpt, opt.value, action);
       }}
-      onCancel={() => showProviderPickerForBulkProfilePhases(api, profileOpt)}
+      onCancel={() => showProviderPickerForBulkProfilePhases(api, profileOpt, action)}
     />
   ));
 }
 
 /**
- * Assigns the selected model to unassigned primary and fallback SDD profile phases.
+ * Assigns the selected model to targeted SDD profile phases and versions before mutation.
  */
-function updateUnassignedProfilePhases(api: any, profileOpt: any, fullModelId: string) {
+function updateBulkProfilePhases(api: any, profileOpt: any, fullModelId: string, action: BulkProfileActionOption) {
   const { profilesDir } = resolvePaths();
   const profilePath = path.join(profilesDir, profileOpt.value);
 
   try {
-    const profileData = readProfileData(profilePath);
     const primarySddAgentNames = Object.keys(api.state.config?.agent || {}).filter(isPrimarySddAgent);
-    const result = assignModelToUnassignedProfilePhases(profileData, primarySddAgentNames, fullModelId);
+    const { assignment } = updateProfileWithBulkPhaseAssignment(profilePath, primarySddAgentNames, fullModelId, action.operation);
 
-    writeProfileData(profilePath, result.profile);
-
-    const totalAssigned = result.modelsAssigned + result.fallbackAssigned;
+    const totalAssigned = assignment.modelsAssigned + assignment.fallbackAssigned;
     api.ui.toast({
       title: totalAssigned > 0 ? "Updated" : "No Changes",
       message:
         totalAssigned > 0
-          ? `Set ${result.modelsAssigned} primary and ${result.fallbackAssigned} fallback unassigned phases to ${fullModelId}`
-          : "No unassigned SDD primary or fallback phases required updates",
+          ? `${action.title}: ${assignment.modelsAssigned} primary and ${assignment.fallbackAssigned} fallback assignments set to ${fullModelId}. Version saved.`
+          : "No targeted SDD primary or fallback phases required updates",
       variant: totalAssigned > 0 ? "success" : "warning",
     });
     showProfileDetailFn(api, profileOpt);
@@ -566,6 +695,83 @@ function updateUnassignedProfilePhases(api: any, profileOpt: any, fullModelId: s
     api.ui.toast({ title: "Error", message: `Failed to update phases: ${e.message}`, variant: "error" });
     showProfileDetailFn(api, profileOpt);
   }
+}
+
+function showProfileVersions(api: any, profileOpt: any) {
+  try {
+    const versions = listProfileVersions(profileOpt.value);
+
+    if (versions.length === 0) {
+      api.ui.toast({ title: "No Versions", message: `No saved versions for '${profileOpt.title}'`, variant: "warning" });
+      showProfileDetailFn(api, profileOpt);
+      return;
+    }
+
+    api.ui.dialog.replace(() => (
+      <api.ui.DialogSelect
+        title={`Versions: ${profileOpt.title}`}
+        options={[
+          ...versions.map(buildProfileVersionListOption),
+          { title: "← Back", value: "__back__", category: NAV_CATEGORY },
+        ]}
+        onSelect={(opt: any) => {
+          if (opt.value === "__back__") showProfileDetailFn(api, profileOpt);
+          else showProfileVersionPreview(api, profileOpt, opt.value);
+        }}
+        onCancel={() => showProfileDetailFn(api, profileOpt)}
+      />
+    ));
+  } catch (e: any) {
+    api.ui.toast({ title: "Version Error", message: e.message || "Failed to list profile versions", variant: "error" });
+    showProfileDetailFn(api, profileOpt);
+  }
+}
+
+function showProfileVersionPreview(api: any, profileOpt: any, versionId: string) {
+  try {
+    const version = readProfileVersion(versionId);
+    const lines = formatProfileVersionPreviewLines(version);
+
+    api.ui.dialog.replace(() => (
+      <api.ui.DialogSelect
+        title={`Preview: ${profileOpt.title}`}
+        options={[
+          ...lines.map((line, index) => ({ title: line, value: `__line__${index}` })),
+          { title: "↩ Restore this version", value: "__restore__", category: NAV_CATEGORY },
+          { title: "← Back", value: "__back__", category: NAV_CATEGORY },
+        ]}
+        onSelect={(opt: any) => {
+          if (opt.value === "__restore__") showConfirmRestoreProfileVersion(api, profileOpt, version.id);
+          else if (opt.value === "__back__") showProfileVersions(api, profileOpt);
+          else showProfileVersionPreview(api, profileOpt, versionId);
+        }}
+        onCancel={() => showProfileVersions(api, profileOpt)}
+      />
+    ));
+  } catch (e: any) {
+    api.ui.toast({ title: "Version Error", message: e.message || "Failed to read profile version", variant: "error" });
+    showProfileVersions(api, profileOpt);
+  }
+}
+
+function showConfirmRestoreProfileVersion(api: any, profileOpt: any, versionId: string) {
+  api.ui.dialog.replace(() => (
+    <api.ui.DialogConfirm
+      title="Restore profile version"
+      message={`Restore '${profileOpt.title}' from this version? Current profile content will be overwritten.`}
+      onConfirm={() => {
+        try {
+          restoreProfileVersion(profileOpt.value, versionId);
+          api.ui.toast({ title: "Restored", message: `Profile '${profileOpt.title}' restored`, variant: "success" });
+          showProfileDetailFn(api, profileOpt);
+        } catch (e: any) {
+          api.ui.toast({ title: "Restore Failed", message: e.message || "Failed to restore version", variant: "error" });
+          showProfileVersionPreview(api, profileOpt, versionId);
+        }
+      }}
+      onCancel={() => showProfileVersionPreview(api, profileOpt, versionId)}
+    />
+  ));
 }
 
 /**
@@ -655,15 +861,23 @@ function updateAgentModel(
 
   try {
     if (mode === "fallback") {
-      const fallbackModels = readProfileFallbackModels(profilePath);
-      fallbackModels[agentName] = fullModelId;
-      writeProfileFallbackModels(profilePath, fallbackModels);
-      api.ui.toast({ title: "Updated", message: `${agentName} fallback set to ${fullModelId}`, variant: "success" });
+      const result = updateProfilePhaseModel(profilePath, agentName, "fallback", fullModelId);
+      api.ui.toast({
+        title: result.changed ? "Updated" : "No Changes",
+        message: result.changed
+          ? `${agentName} fallback set to ${fullModelId}. Version saved.`
+          : `${agentName} fallback already uses ${fullModelId}`,
+        variant: result.changed ? "success" : "warning",
+      });
     } else {
-      const profileModels = readProfileModels(profilePath);
-      profileModels[agentName] = fullModelId;
-      writeProfileModels(profilePath, profileModels);
-      api.ui.toast({ title: "Updated", message: `${agentName} set to ${fullModelId}`, variant: "success" });
+      const result = updateProfilePhaseModel(profilePath, agentName, "primary", fullModelId);
+      api.ui.toast({
+        title: result.changed ? "Updated" : "No Changes",
+        message: result.changed
+          ? `${agentName} set to ${fullModelId}. Version saved.`
+          : `${agentName} already uses ${fullModelId}`,
+        variant: result.changed ? "success" : "warning",
+      });
     }
     showProfileDetailFn(api, profileOpt);
   } catch (e: any) {
