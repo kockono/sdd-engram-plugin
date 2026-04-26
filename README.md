@@ -122,6 +122,57 @@ Safety: Profile versions... → preview the saved snapshot → restore if the bu
 
 Before any bulk operation is applied, the plugin saves a profile version automatically.
 
+#### Compact text screenshots
+
+These compact mockups show the new profile flows without relying on image assets:
+
+```text
+Profile: team-default                         active
+──────────────────────────────────────────────────
+Primary phases
+  sdd-spec      anthropic/claude-sonnet-4-6
+  sdd-apply     openai/gpt-5.5
+
+Fallback phases
+  sdd-spec      google/gemini-flash-2.0
+  sdd-apply     inherited from primary
+
+[Activate]  [Edit JSON]  [Bulk actions...]  [Profile versions...]
+```
+
+```text
+Bulk actions
+──────────────────────────────────────────────────
+Set
+  Set all primary phases
+  Set all fallback phases
+  Set all phases and fallbacks
+
+Override
+  Override all primary phases        requires confirmation
+  Override all fallback phases       requires confirmation
+  Override all phases and fallbacks  requires confirmation
+```
+
+```text
+Profile versions: team-default
+──────────────────────────────────────────────────
+When                  Bulk                         Phase
+2026-04-26 14:08      Set all fallback phases      all fallback phases
+2026-04-26 13:52      Override all primary phases  all primary phases
+2026-04-26 13:10      Manual edit                  sdd-apply
+```
+
+```text
+Preview version 2026-04-26 14:08
+──────────────────────────────────────────────────
+models.sdd-apply      openai/gpt-5.5
+fallback.sdd-apply    google/gemini-flash-2.0
+
+[Restore this version]  [Back]
+Restore? This replaces the current profile file.
+```
+
 ### Profile Versions
 
 Use **Profile versions...** from the profile detail screen to review saved profile snapshots.
