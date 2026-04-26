@@ -111,6 +111,15 @@ The difference is intentional:
 - **Set** actions are fill-only. They keep existing values and only populate empty entries.
 - **Override** actions are overwrite operations. They can replace existing choices, so the UI asks for confirmation before applying them.
 
+Compact flow example:
+
+```text
+Before: profile has mixed primary models and missing fallbacks.
+Bulk action: Set all fallback phases → google/gemini-flash-2.0.
+After: existing primary models stay untouched; empty fallbacks are filled.
+Safety: Profile versions... → preview the saved snapshot → restore if the bulk change was not what you wanted.
+```
+
 Before any bulk operation is applied, the plugin saves a profile version automatically.
 
 ### Profile Versions
