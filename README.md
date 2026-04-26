@@ -179,6 +179,7 @@ Use **Profile versions...** from the profile detail screen to review saved profi
 
 - Versions are created automatically before bulk profile actions.
 - Versions are also created automatically before individual primary or fallback phase model changes.
+- Profile versions use one unified history for bulk actions and individual phase changes, retaining the latest 60 snapshots per profile.
 - Each version can be previewed before restoring it.
 - Restore writes the selected snapshot back to the profile file.
 

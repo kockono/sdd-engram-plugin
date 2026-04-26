@@ -576,8 +576,8 @@ describe('profiles logic', () => {
       });
     });
 
-    it('prunes profile versions to the newest 30 snapshots', () => {
-      const existingFiles = Array.from({ length: 31 }, (_, index) => {
+    it('prunes profile versions to the newest 60 snapshots', () => {
+      const existingFiles = Array.from({ length: 61 }, (_, index) => {
         const hour = String(index).padStart(2, '0');
         return `2026-04-26T${hour}-00-00-000Z-${index}.json`;
       });

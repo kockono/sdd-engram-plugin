@@ -37,7 +37,7 @@ import {
 import { resolvePaths, ensureProfilesDir } from "./config";
 
 const PROFILE_VERSION_FORMAT = 1;
-const DEFAULT_PROFILE_VERSION_RETENTION = 30;
+const DEFAULT_PROFILE_VERSION_RETENTION = 60;
 
 function isUnassignedProfileValue(value: unknown): boolean {
   return typeof value !== "string" || value.trim().length === 0;
