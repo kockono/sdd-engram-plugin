@@ -8,6 +8,8 @@ import {
   extractSddFallbackModels, 
   readProfileModels, 
   readProfileFallbackModels, 
+  writeProfileModels,
+  writeProfileFallbackModels,
   sanitizeProfileName,
   syncSddFallbackAgents, 
   validateProfileFallbackMapping,
@@ -23,6 +25,7 @@ import {
   restoreProfileVersion,
   updateProfileWithBulkPhaseAssignment,
   updateProfilePhaseModel,
+  activateProfileFile,
   deleteProfileFile,
   renameProfileFile
 } from './profiles';
@@ -146,6 +149,12 @@ describe('profiles logic', () => {
       const models = readProfileModels('/mock/profiles/config.json');
       expect(models).toEqual({ 'sdd-init': 'gpt-4' });
     });
+
+    it('returns empty models for corrupted json payloads instead of throwing', () => {
+      vi.mocked(fs.readFileSync).mockReturnValue('{invalid json');
+
+      expect(readProfileModels('/mock/profiles/corrupt.json')).toEqual({});
+    });
   });
 
   describe('readProfileData and writeProfileData', () => {
@@ -166,8 +175,12 @@ describe('profiles logic', () => {
         description: 'team defaults'
       });
       expect(fs.writeFileSync).toHaveBeenCalledWith(
-        '/mock/profiles/compatible.json',
+        expect.stringMatching(/^\/mock\/profiles\/compatible\.json\.tmp-[0-9a-f]{8}$/),
         JSON.stringify(profileData, null, 2)
+      );
+      expect(fs.renameSync).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/mock\/profiles\/compatible\.json\.tmp-[0-9a-f]{8}$/),
+        '/mock/profiles/compatible.json'
       );
     });
 
@@ -181,12 +194,16 @@ describe('profiles logic', () => {
       } as any);
 
       expect(fs.writeFileSync).toHaveBeenCalledWith(
-        '/mock/profiles/compatible.json',
+        expect.stringMatching(/^\/mock\/profiles\/compatible\.json\.tmp-[0-9a-f]{8}$/),
         JSON.stringify({
           description: 'team defaults',
           models: { 'sdd-init': 'gpt-4' },
           fallback: { 'sdd-init': 'gpt-3.5' }
         }, null, 2)
+      );
+      expect(fs.renameSync).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/mock\/profiles\/compatible\.json\.tmp-[0-9a-f]{8}$/),
+        '/mock/profiles/compatible.json'
       );
     });
 
@@ -205,12 +222,94 @@ describe('profiles logic', () => {
         description: 'team defaults'
       });
       expect(fs.writeFileSync).toHaveBeenLastCalledWith(
-        '/mock/profiles/compatible.json',
+        expect.stringMatching(/^\/mock\/profiles\/compatible\.json\.tmp-[0-9a-f]{8}$/),
         JSON.stringify({
           description: 'team defaults',
           models: { 'sdd-init': 'gpt-4' }
         }, null, 2)
       );
+      expect(fs.renameSync).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/mock\/profiles\/compatible\.json\.tmp-[0-9a-f]{8}$/),
+        '/mock/profiles/compatible.json'
+      );
+    });
+
+    it('reads and parses profile json only once and degrades safely when corrupt', () => {
+      vi.mocked(fs.readFileSync).mockReturnValue('{invalid json');
+
+      expect(readProfileData('/mock/profiles/corrupt.json')).toEqual({ models: {} });
+      expect(fs.readFileSync).toHaveBeenCalledTimes(1);
+    });
+
+    it('cleans temporary files when atomic profile rename fails and fsyncs written content', () => {
+      vi.mocked(fs.openSync).mockReturnValue(123 as any);
+      vi.mocked(fs.renameSync).mockImplementationOnce((fromPath: any, toPath: any) => {
+        if (String(toPath) === '/mock/profiles/compatible.json') {
+          throw new Error('rename failed');
+        }
+
+        return undefined as any;
+      });
+
+      expect(() => writeProfileData('/mock/profiles/compatible.json', { models: { 'sdd-init': 'gpt-4' } })).toThrow('rename failed');
+      expect(fs.fsyncSync).toHaveBeenCalledWith(123);
+      expect(fs.closeSync).toHaveBeenCalledWith(123);
+      expect(fs.unlinkSync).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/mock\/profiles\/compatible\.json\.tmp-[0-9a-f]{8}$/)
+      );
+    });
+
+    it('fsyncs both temp file and parent directory during atomic write', () => {
+      vi.mocked(fs.openSync)
+        .mockReturnValueOnce(101 as any)
+        .mockReturnValueOnce(202 as any);
+
+      writeProfileData('/mock/profiles/compatible.json', { models: { 'sdd-init': 'gpt-4' } });
+
+      expect(fs.openSync).toHaveBeenNthCalledWith(
+        1,
+        expect.stringMatching(/^\/mock\/profiles\/compatible\.json\.tmp-[0-9a-f]{8}$/),
+        'r+'
+      );
+      expect(fs.openSync).toHaveBeenNthCalledWith(2, '/mock/profiles', 'r');
+      expect(fs.fsyncSync).toHaveBeenCalledWith(101);
+      expect(fs.fsyncSync).toHaveBeenCalledWith(202);
+      expect(fs.closeSync).toHaveBeenCalledWith(101);
+      expect(fs.closeSync).toHaveBeenCalledWith(202);
+    });
+
+    it('writeProfileModels preserves non-model profile fields', () => {
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+        models: { 'sdd-init': 'old/model' },
+        fallback: { 'sdd-init': 'old/fallback' },
+        description: 'team defaults'
+      }));
+
+      writeProfileModels('/mock/profiles/compatible.json', { 'sdd-init': 'new/model' });
+
+      const persisted = JSON.parse(String(vi.mocked(fs.writeFileSync).mock.calls[0]?.[1]));
+      expect(persisted).toEqual({
+        models: { 'sdd-init': 'new/model' },
+        fallback: { 'sdd-init': 'old/fallback' },
+        description: 'team defaults'
+      });
+    });
+
+    it('writeProfileFallbackModels preserves non-model profile fields', () => {
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+        models: { 'sdd-init': 'old/model' },
+        fallback: { 'sdd-init': 'old/fallback' },
+        description: 'team defaults'
+      }));
+
+      writeProfileFallbackModels('/mock/profiles/compatible.json', { 'sdd-init': 'new/fallback' });
+
+      const persisted = JSON.parse(String(vi.mocked(fs.writeFileSync).mock.calls[0]?.[1]));
+      expect(persisted).toEqual({
+        models: { 'sdd-init': 'old/model' },
+        fallback: { 'sdd-init': 'new/fallback' },
+        description: 'team defaults'
+      });
     });
   });
 
@@ -821,10 +920,12 @@ describe('profiles logic', () => {
       expect(writes[0].filePath).toContain('/mock/config/profile-versions/team.json/');
       expect(writes[0].content).toContain('Snapshot before restoring 2026-04-26T10-00-00-000Z-a.json');
       expect(writes[0].content).toContain('live/model');
-      expect(writes[1]).toEqual({
-        filePath: '/mock/profiles/team.json',
-        content: '{"models":{"sdd-init":"old/model"}}'
-      });
+      expect(writes[1].filePath).toMatch(/^\/mock\/profiles\/team\.json\.tmp-[0-9a-f]{8}$/);
+      expect(writes[1].content).toBe('{"models":{"sdd-init":"old/model"}}');
+      expect(fs.renameSync).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/mock\/profiles\/team\.json\.tmp-[0-9a-f]{8}$/),
+        '/mock/profiles/team.json'
+      );
       expect(() => restoreProfileVersion('other.json', 'team.json/2026-04-26T10-00-00-000Z-a.json')).toThrow('does not match selected profile');
     });
 
@@ -856,10 +957,12 @@ describe('profiles logic', () => {
       expect(writes[0].filePath).toContain('/mock/config/profile-versions/team.json/');
       expect(writes[0].content).toContain('"beforeRaw": "{invalid current profile"');
       expect(writes[0].content).toContain('"preview": {\n    "models": {},\n    "fallback": {}\n  }');
-      expect(writes[1]).toEqual({
-        filePath: '/mock/profiles/team.json',
-        content: '{"models":{"sdd-init":"old/model"}}'
-      });
+      expect(writes[1].filePath).toMatch(/^\/mock\/profiles\/team\.json\.tmp-[0-9a-f]{8}$/);
+      expect(writes[1].content).toBe('{"models":{"sdd-init":"old/model"}}');
+      expect(fs.renameSync).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/mock\/profiles\/team\.json\.tmp-[0-9a-f]{8}$/),
+        '/mock/profiles/team.json'
+      );
     });
 
     it('restores raw snapshot content even when beforeRaw is invalid JSON', () => {
@@ -887,10 +990,12 @@ describe('profiles logic', () => {
       });
 
       expect(() => restoreProfileVersion('team.json', 'team.json/2026-04-26T10-00-00-000Z-a.json')).not.toThrow();
-      expect(writes[1]).toEqual({
-        filePath: '/mock/profiles/team.json',
-        content: '{invalid snapshot payload'
-      });
+      expect(writes[1].filePath).toMatch(/^\/mock\/profiles\/team\.json\.tmp-[0-9a-f]{8}$/);
+      expect(writes[1].content).toBe('{invalid snapshot payload');
+      expect(fs.renameSync).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/mock\/profiles\/team\.json\.tmp-[0-9a-f]{8}$/),
+        '/mock/profiles/team.json'
+      );
     });
 
     it('creates a version before mutating bulk write and skips versioning for no-op or validation failure', () => {
@@ -904,7 +1009,11 @@ describe('profiles logic', () => {
 
       expect(result.assignment.changed).toBe(true);
       expect(writes[0]).toContain('/mock/config/profile-versions/team.json/');
-      expect(writes[1]).toBe('/mock/profiles/team.json');
+      expect(writes[1]).toMatch(/^\/mock\/profiles\/team\.json\.tmp-[0-9a-f]{8}$/);
+      expect(fs.renameSync).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/mock\/profiles\/team\.json\.tmp-[0-9a-f]{8}$/),
+        '/mock/profiles/team.json'
+      );
 
       vi.clearAllMocks();
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ models: { 'sdd-init': 'existing' }, fallback: { 'sdd-init': 'existing' } }));
@@ -914,6 +1023,16 @@ describe('profiles logic', () => {
 
       expect(() => updateProfileWithBulkPhaseAssignment('/mock/profiles/team.json', ['sdd-init'], ' ', operation)).toThrow('modelId must be a non-empty string');
       expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('reuses already-read profile raw when creating bulk version snapshots', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(fs.readdirSync).mockReturnValue([] as any);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ models: { 'sdd-init': '' }, fallback: {} }));
+
+      updateProfileWithBulkPhaseAssignment('/mock/profiles/team.json', ['sdd-init'], 'provider/model', operation);
+
+      expect(fs.readFileSync).toHaveBeenCalledTimes(1);
     });
 
     it('creates a phase source version before mutating a single primary phase model', () => {
@@ -943,7 +1062,11 @@ describe('profiles logic', () => {
       expect(result.profile.fallback?.['sdd-design']).toBe('old/fallback');
       expect((result.profile as any).description).toBe('team defaults');
       expect(writes[0]).toContain('/mock/config/profile-versions/team.json/');
-      expect(writes[1]).toBe('/mock/profiles/team.json');
+      expect(writes[1]).toMatch(/^\/mock\/profiles\/team\.json\.tmp-[0-9a-f]{8}$/);
+      expect(fs.renameSync).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/mock\/profiles\/team\.json\.tmp-[0-9a-f]{8}$/),
+        '/mock/profiles/team.json'
+      );
     });
 
     it('does not persist version metadata in the profile payload for phase model updates', () => {
@@ -961,7 +1084,7 @@ describe('profiles logic', () => {
 
       updateProfilePhaseModel('/mock/profiles/team.json', 'sdd-design', 'primary', 'new/model');
 
-      const profileWrite = writes.find((write) => write.filePath === '/mock/profiles/team.json');
+      const profileWrite = writes.find((write) => /^\/mock\/profiles\/team\.json\.tmp-[0-9a-f]{8}$/.test(write.filePath));
       expect(profileWrite).toBeDefined();
 
       const persistedProfile = JSON.parse(profileWrite!.content);
@@ -1283,6 +1406,10 @@ describe('profiles logic', () => {
       expect(() => renameProfileFile('old.json', 'new.json')).toThrow('version rewrite failed');
       expect(files['/mock/profiles/old.json']).toBe('{"models":{"sdd-init":"live/model"}}');
       expect(files['/mock/profiles/new.json']).toBeUndefined();
+      const directVersionWrites = vi.mocked(fs.writeFileSync).mock.calls
+        .map(([filePath]) => String(filePath))
+        .filter((filePath) => filePath.startsWith('/mock/config/profile-versions/new.json/') && filePath.endsWith('.json'));
+      expect(directVersionWrites).toEqual([]);
 
       const firstVersion = readProfileVersion('old.json/2026-04-26T10-00-00-000Z-a.json');
       const secondVersion = readProfileVersion('old.json/2026-04-26T11-00-00-000Z-b.json');
@@ -1294,6 +1421,13 @@ describe('profiles logic', () => {
       expect(files['/mock/config/profile-versions/new.json/2026-04-26T10-00-00-000Z-a.json']).toBeUndefined();
     });
 
+    it('reports invalid profile version data when version file JSON is corrupt', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue('{invalid json');
+
+      expect(() => readProfileVersion('team.json/2026-04-26T10-00-00-000Z-a.json')).toThrow('Invalid profile version data');
+    });
+
     it('deletes matching profile version history with the profile file', () => {
       vi.mocked(fs.existsSync).mockImplementation((filePath: any) => String(filePath) === '/mock/config/profile-versions/team.json');
 
@@ -1301,6 +1435,41 @@ describe('profiles logic', () => {
 
       expect(fs.unlinkSync).toHaveBeenCalledWith('/mock/profiles/team.json');
       expect(fs.rmSync).toHaveBeenCalledWith('/mock/config/profile-versions/team.json', { recursive: true, force: true });
+    });
+  });
+
+  describe('activateProfileFile', () => {
+    it('returns null and shows toast when on-disk global config JSON is invalid', async () => {
+      vi.mocked(fs.existsSync).mockImplementation((filePath: any) => String(filePath) === '/mock/config/opencode.json');
+      vi.mocked(fs.readFileSync).mockImplementation((filePath: any) => {
+        if (String(filePath) === '/mock/profiles/team.json') {
+          return JSON.stringify({ models: { 'sdd-init': 'gpt-4' } });
+        }
+
+        return '{invalid global config json';
+      });
+
+      const toast = vi.fn();
+      const api = {
+        ui: { toast },
+        client: {
+          global: {
+            config: {
+              get: vi.fn(),
+              update: vi.fn(),
+            },
+          },
+        },
+      } as any;
+
+      const result = await activateProfileFile(api, '/mock/profiles/team.json', 'team');
+
+      expect(result).toBeNull();
+      expect(api.client.global.config.update).not.toHaveBeenCalled();
+      expect(toast).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Activation Failed',
+        variant: 'error',
+      }));
     });
   });
 });

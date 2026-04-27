@@ -10,6 +10,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { randomBytes } from "node:crypto";
 import {
   BULK_ASSIGNMENT_MODE,
   BULK_ASSIGNMENT_TARGET,
@@ -156,7 +157,12 @@ function normalizePersistedProfileData(profile: ProfileData): ProfileData {
  * @returns Mapping of SDD agent names to their model IDs
  */
 export function readProfileModels(profilePath: string): ProfileModels {
-  const raw = JSON.parse(fs.readFileSync(profilePath, "utf-8"));
+  let raw: any;
+  try {
+    raw = JSON.parse(fs.readFileSync(profilePath, "utf-8"));
+  } catch {
+    return {};
+  }
 
   // New profile format: { models: { ... }, fallback: { ... } }
   if (raw && typeof raw === "object" && !Array.isArray(raw) && raw.models && typeof raw.models === "object") {
@@ -200,11 +206,47 @@ export function readProfileFallbackModels(profilePath: string): ProfileFallbackM
  * Reads full profile data from file (models + fallback)
  */
 export function readProfileData(profilePath: string): ProfileData {
-  const raw = JSON.parse(fs.readFileSync(profilePath, "utf-8"));
-  const fallback = readProfileFallbackModels(profilePath);
+  try {
+    const rawContent = fs.readFileSync(profilePath, "utf-8").toString();
+    return readProfileDataFromRaw(rawContent);
+  } catch {
+    return { models: {} };
+  }
+}
+
+function readProfileDataFromRaw(rawContent: string): ProfileData {
+  let raw: any;
+  try {
+    raw = JSON.parse(rawContent);
+  } catch {
+    return { models: {} };
+  }
+
+  let models: ProfileModels;
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && raw.models && typeof raw.models === "object") {
+    models = Object.fromEntries(
+      Object.entries(raw.models)
+        .filter(([name, value]: any) => isPrimarySddAgent(name) && typeof value === "string" && value.trim())
+        .map(([name, value]: any) => [name, value])
+    );
+  } else if (raw && typeof raw === "object" && !Array.isArray(raw) && !raw.agent && !raw.models) {
+    models = Object.fromEntries(
+      Object.entries(raw)
+        .filter(
+          ([name, value]: any) =>
+            isPrimarySddAgent(name) &&
+            ((typeof value === "string" && value) || (typeof value?.model === "string" && value.model))
+        )
+        .map(([name, value]: any) => [name, typeof value === "string" ? value : value.model])
+    );
+  } else {
+    models = extractSddAgentModels(raw);
+  }
+
+  const fallback = extractSddFallbackModels(raw);
   return {
     ...extractPersistedProfileExtras(raw),
-    models: readProfileModels(profilePath),
+    models,
     ...(Object.keys(fallback).length > 0
       ? { fallback }
       : {}),
@@ -215,7 +257,7 @@ export function readProfileData(profilePath: string): ProfileData {
  * Persists full profile data while preserving the existing profile payload shape.
  */
 export function writeProfileData(profilePath: string, profile: ProfileData): void {
-  fs.writeFileSync(profilePath, JSON.stringify(normalizePersistedProfileData(profile), null, 2));
+  atomicWriteFile(profilePath, JSON.stringify(normalizePersistedProfileData(profile), null, 2));
 }
 
 function normalizePrimarySddAgentNames(primarySddAgentNames: string[]): string[] {
@@ -265,9 +307,38 @@ function resolveProfileVersionPath(versionId: string): string {
 }
 
 function atomicWriteFile(filePath: string, content: string): void {
-  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmpPath, content);
-  fs.renameSync(tmpPath, filePath);
+  const tmpPath = `${filePath}.tmp-${randomBytes(4).toString("hex")}`;
+  let tempFd: number | undefined;
+  let dirFd: number | undefined;
+  let renameCompleted = false;
+
+  try {
+    fs.writeFileSync(tmpPath, content);
+
+    tempFd = fs.openSync(tmpPath, "r+");
+    fs.fsyncSync(tempFd);
+    fs.closeSync(tempFd);
+    tempFd = undefined;
+
+    fs.renameSync(tmpPath, filePath);
+    renameCompleted = true;
+
+    dirFd = fs.openSync(path.dirname(filePath), "r");
+    fs.fsyncSync(dirFd);
+  } finally {
+    if (typeof tempFd === "number") {
+      fs.closeSync(tempFd);
+    }
+    if (typeof dirFd === "number") {
+      fs.closeSync(dirFd);
+    }
+
+    if (!renameCompleted) {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {}
+    }
+  }
 }
 
 function buildEmptyProfilePreview(): { models: ProfileModels; fallback: ProfileFallbackModels } {
@@ -277,7 +348,12 @@ function buildEmptyProfilePreview(): { models: ProfileModels; fallback: ProfileF
 function buildRenamedProfileVersion(versionFile: string, versionRaw: string, oldProfileFile: string, newProfileFile: string): ProfileVersion {
   const oldVersionId = `${oldProfileFile}/${versionFile}`;
   const newVersionId = `${newProfileFile}/${versionFile}`;
-  const parsed = JSON.parse(versionRaw);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(versionRaw);
+  } catch {
+    throw new Error("Invalid profile version data");
+  }
   if (
     parsed?.version !== PROFILE_VERSION_FORMAT ||
     parsed?.id !== oldVersionId ||
@@ -548,13 +624,16 @@ export function createProfileVersion(
   profilePath: string,
   operation: BulkAssignmentOperation | ProfileVersionOperation,
   operationSummary: string,
-  retention = DEFAULT_PROFILE_VERSION_RETENTION
+  retention = DEFAULT_PROFILE_VERSION_RETENTION,
+  beforeRawOverride?: string
 ): ProfileVersion {
   const profileFile = safeProfileFileName(profilePath);
   const versionDir = resolveProfileVersionDir(profileFile);
   if (!fs.existsSync(versionDir)) fs.mkdirSync(versionDir, { recursive: true });
 
-  const beforeRaw = fs.readFileSync(profilePath, "utf-8").toString();
+  const beforeRaw = typeof beforeRawOverride === "string"
+    ? beforeRawOverride
+    : fs.readFileSync(profilePath, "utf-8").toString();
   const createdAt = new Date().toISOString();
   const versionFile = `${sanitizeTimestampForFileName(createdAt)}-${Math.random().toString(36).slice(2, 8)}.json`;
   const id = `${profileFile}/${versionFile}`;
@@ -580,7 +659,12 @@ export function createProfileVersion(
 export function readProfileVersion(versionId: string): ProfileVersion {
   const versionPath = resolveProfileVersionPath(versionId);
   if (!fs.existsSync(versionPath)) throw new Error("Profile version not found");
-  const parsed = JSON.parse(fs.readFileSync(versionPath, "utf-8").toString());
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(versionPath, "utf-8").toString());
+  } catch {
+    throw new Error("Invalid profile version data");
+  }
   if (parsed?.version !== PROFILE_VERSION_FORMAT || parsed?.id !== versionId || parsed?.profileFile !== parseVersionId(versionId).profileFile) {
     throw new Error("Invalid profile version data");
   }
@@ -596,7 +680,10 @@ export function listProfileVersions(profilePathOrFile: string): ProfileVersionMe
     .filter((file) => String(file).endsWith(".json"))
     .map((file) => {
       try {
-        return readProfileVersion(`${profileFile}/${file}`);
+        const versionId = `${profileFile}/${file}`;
+        const versionPath = path.join(versionDir, file);
+        const parsed = JSON.parse(fs.readFileSync(versionPath, "utf-8").toString());
+        return normalizeProfileVersion(parsed, versionId);
       } catch {
         return null;
       }
@@ -623,7 +710,7 @@ export function restoreProfileVersion(profilePathOrFile: string, versionId: stri
     },
     `Snapshot before restoring ${path.basename(versionId)}`
   );
-  fs.writeFileSync(profilePath, version.beforeRaw);
+  atomicWriteFile(profilePath, version.beforeRaw);
   return version;
 }
 
@@ -633,14 +720,17 @@ export function updateProfileWithBulkPhaseAssignment(
   modelId: string,
   operation: BulkAssignmentOperation
 ): { assignment: BulkProfilePhaseAssignmentResult; version?: ProfileVersion } {
-  const profileData = readProfileData(profilePath);
+  const beforeRaw = fs.readFileSync(profilePath, "utf-8").toString();
+  const profileData = readProfileDataFromRaw(beforeRaw);
   const assignment = applyBulkProfilePhaseAssignment(profileData, primarySddAgentNames, modelId, operation);
   if (!assignment.changed) return { assignment };
 
   const version = createProfileVersion(
     profilePath,
     normalizeBulkVersionOperation(operation, assignment.modelsAssigned + assignment.fallbackAssigned),
-    buildOperationSummary(operation, assignment.modelsAssigned, assignment.fallbackAssigned)
+    buildOperationSummary(operation, assignment.modelsAssigned, assignment.fallbackAssigned),
+    DEFAULT_PROFILE_VERSION_RETENTION,
+    beforeRaw
   );
   writeProfileData(profilePath, assignment.profile);
   return { assignment, version };
@@ -703,8 +793,10 @@ export function updateProfilePhaseModel(
  * @param models - Mapping of SDD agent names to their model IDs
  */
 export function writeProfileModels(profilePath: string, models: ProfileModels): void {
-  const fallback = readProfileFallbackModels(profilePath);
+  const currentProfile = readProfileData(profilePath);
+  const fallback = currentProfile.fallback || {};
   const payload: ProfileData = {
+    ...currentProfile,
     models,
     ...(Object.keys(fallback).length > 0 ? { fallback } : {}),
   };
@@ -715,8 +807,10 @@ export function writeProfileModels(profilePath: string, models: ProfileModels): 
  * Writes fallback model overrides while preserving primary models
  */
 export function writeProfileFallbackModels(profilePath: string, fallback: ProfileFallbackModels): void {
-  const models = readProfileModels(profilePath);
+  const currentProfile = readProfileData(profilePath);
+  const models = currentProfile.models || {};
   const payload: ProfileData = {
+    ...currentProfile,
     models,
     ...(Object.keys(fallback).length > 0 ? { fallback } : {}),
   };
@@ -908,7 +1002,11 @@ export async function activateProfileFile(api: any, profilePath: string, profile
     // and sending that back can materialize/inline file contents.
     let currentConfig: any;
     if (fs.existsSync(configPath)) {
-      currentConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      try {
+        currentConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      } catch {
+        throw new Error("Global config JSON is invalid");
+      }
     } else {
       const globalConfigResult = await api.client.global.config.get();
       currentConfig = globalConfigResult?.data || {};
@@ -1002,19 +1100,24 @@ export function renameProfileFile(oldFileName: string, newFileName: string): voi
       .map((file) => {
         const versionFile = String(file);
         const versionPath = path.join(oldVersionDir, versionFile);
+        const originalContent = fs.readFileSync(versionPath, "utf-8").toString();
         try {
           const version = buildRenamedProfileVersion(
             versionFile,
-            fs.readFileSync(versionPath, "utf-8").toString(),
+            originalContent,
             safeOldFileName,
             safeNewFileName
           );
-          return { versionFile, version };
+          return {
+            versionFile,
+            rewrittenContent: JSON.stringify(version, null, 2),
+            originalContent,
+          };
         } catch {
           return null;
         }
       })
-      .filter((version): version is { versionFile: string; version: ProfileVersion } => Boolean(version))
+      .filter((version): version is { versionFile: string; rewrittenContent: string; originalContent: string } => Boolean(version))
     : [];
 
   let profileRenamed = false;
@@ -1022,34 +1125,37 @@ export function renameProfileFile(oldFileName: string, newFileName: string): voi
   const rewrittenVersionContents = new Map<string, string>();
 
   try {
+    if (fs.existsSync(oldVersionDir)) {
+      fs.renameSync(oldVersionDir, newVersionDir);
+      versionDirRenamed = true;
+    }
+
     fs.renameSync(oldPath, newPath);
     profileRenamed = true;
-    if (!fs.existsSync(oldVersionDir)) return;
 
-    fs.renameSync(oldVersionDir, newVersionDir);
-    versionDirRenamed = true;
+    if (!versionDirRenamed) return;
 
     for (const migratedVersion of migratedVersions) {
       const versionPath = path.join(newVersionDir, migratedVersion.versionFile);
-      rewrittenVersionContents.set(versionPath, fs.readFileSync(versionPath, "utf-8").toString());
-      atomicWriteFile(versionPath, JSON.stringify(migratedVersion.version, null, 2));
+      rewrittenVersionContents.set(versionPath, migratedVersion.originalContent);
+      atomicWriteFile(versionPath, migratedVersion.rewrittenContent);
     }
   } catch (error) {
     for (const [versionPath, originalContent] of rewrittenVersionContents.entries()) {
       try {
-        fs.writeFileSync(versionPath, originalContent);
-      } catch {}
-    }
-
-    if (versionDirRenamed) {
-      try {
-        fs.renameSync(newVersionDir, oldVersionDir);
+        atomicWriteFile(versionPath, originalContent);
       } catch {}
     }
 
     if (profileRenamed) {
       try {
         fs.renameSync(newPath, oldPath);
+      } catch {}
+    }
+
+    if (versionDirRenamed) {
+      try {
+        fs.renameSync(newVersionDir, oldVersionDir);
       } catch {}
     }
 
