@@ -1,3 +1,17 @@
+# [1.2.0](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/compare/v1.1.7...v1.2.0) (2026-04-27)
+
+
+### Bug Fixes
+
+* harden profile version history operations ([8066d08](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/commit/8066d0823e8b7496af385adb26aee0ac95061df7))
+
+
+### Features
+
+* add bulk profile phase assignment ([340ed1f](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/commit/340ed1f1c75ab04e52fe1d5ef31c74ef4533ff86))
+* add profile bulk actions and version history ([ab5de9a](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/commit/ab5de9ab6b61a0d0de64765491eb9e99dc0cd4bd))
+* retain sixty profile versions ([41a3e7d](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/commit/41a3e7db1b9db1ca0d6934d8eaaee4cacee90a24))
+
 ## [1.1.7](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/compare/v1.1.6...v1.1.7) (2026-04-19)
 
 
