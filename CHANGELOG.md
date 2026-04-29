@@ -1,3 +1,10 @@
+## [1.3.2](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/compare/v1.3.1...v1.3.2) (2026-04-29)
+
+
+### Bug Fixes
+
+* ensure real-time reactivity for status badge ([ae5953a](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/commit/ae5953aec13ff4308a00b92102746c3075bdfd4c))
+
 ## [1.3.1](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/compare/v1.3.0...v1.3.1) (2026-04-29)
 
 
