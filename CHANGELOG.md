@@ -1,3 +1,10 @@
+## [1.3.1](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/compare/v1.3.0...v1.3.1) (2026-04-29)
+
+
+### Bug Fixes
+
+* use engram http api for project memories ([5ce7202](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/commit/5ce720205ff9d1331d2dd9c1789b17f41cddfe8d))
+
 # [1.3.0](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/compare/v1.2.0...v1.3.0) (2026-04-29)
 
 
