@@ -53,11 +53,11 @@ Legacy flat format is also supported for backwards compatibility:
 
 ### 2. Engram Project Memories
 
-Full integration with the [Engram](https://github.com/Gentleman-Programming/gentle-ai) memory system.
+Full integration with the [Engram](https://github.com/Gentleman-Programming/gentle-ai) memory system via its HTTP API.
 
-- **List:** Browse all stored observations for the current project (resolved across git remote, git root, and cwd aliases).
+- **List:** Browse all stored observations for the current project (resolved across git remote, git root, and cwd aliases). Calls the Engram server on port 7437.
 - **Read:** View full memory content, type, scope, and timestamp.
-- **Delete:** Logically remove a memory to prevent it from affecting the current session context.
+- **Delete:** Logically remove a memory via the Engram API to prevent it from affecting the current session context.
 
 ---
 
@@ -344,8 +344,8 @@ Uses `semantic-release` on pushes to `main`. See [docs/publish.md](docs/publish.
 
 - **Package:** `opencode-sdd-engram-manage`
 - **Current version:** see [CHANGELOG.md](CHANGELOG.md) or [npm](https://www.npmjs.com/package/opencode-sdd-engram-manage)
-- **Requires:** `opencode >= 1.3.13`
-- **Peer dependencies:** `@opencode-ai/plugin ^1.4.9`, `@opentui/core ^0.1.100`, `@opentui/solid ^0.1.100`, `solid-js`
+- **Requires:** `opencode >= 1.3.13`, Engram server running on port 7437.
+- **Peer dependencies:** `@opencode-ai/plugin >= 1.14.29`, `@opentui/core >= 0.2.0 < 1`, `@opentui/solid >= 0.2.0 < 1`, `solid-js 1.9.12`
 - **License:** [MIT](LICENSE)
 
 Developed by [j0k3r-dev-rgl](https://github.com/j0k3r-dev-rgl).

@@ -4,48 +4,16 @@
 /**
  * Engram Memories Logic
  * 
- * Provides direct access to the Engram SQLite database to retrieve 
+ * Provides access to the Engram HTTP API server to retrieve 
  * and manage project-specific observations.
  */
 
-import { execFileSync } from "node:child_process";
 import * as path from "node:path";
-import * as os from "node:os";
 import { resolveProjectCandidates, resolveProjectName } from "./config";
 import type { EngramObservation } from "./types";
 
-const ENGRAM_DB = path.join(os.homedir(), ".engram", "engram.db");
-
-/**
- * Parses raw SQLite JSON output into a typed array
- * 
- * @param output - Raw output string from sqlite3 -json
- * @returns Array of parsed objects
- */
-function toArrayOutput(output: string): any[] {
-  const trimmed = output?.trim();
-  if (!trimmed) return [];
-
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (Array.isArray(parsed)) return parsed;
-    if (parsed && typeof parsed === "object") return [parsed];
-    return [];
-  } catch {}
-
-  const rows: any[] = [];
-  for (const line of trimmed.split(/\r?\n/)) {
-    const row = line.trim();
-    if (!row) continue;
-    try {
-      const parsed = JSON.parse(row);
-      if (Array.isArray(parsed)) rows.push(...parsed);
-      else if (parsed && typeof parsed === "object") rows.push(parsed);
-    } catch {}
-  }
-
-  return rows;
-}
+const ENGRAM_PORT = parseInt(process.env.ENGRAM_PORT ?? "7437");
+const ENGRAM_URL = `http://127.0.0.1:${ENGRAM_PORT}`;
 
 /**
  * Normalizes a raw database memory row into a typed EngramObservation
@@ -70,94 +38,84 @@ function normalizeMemory(memory: any, fallbackProject: string): EngramObservatio
 }
 
 /**
- * Executes a SQLite query and returns results in JSON format
+ * Lists all active memories associated with the current project using the Engram HTTP API
  * 
- * @param query - The SQL query to execute
- * @returns Array of observation results
+ * @param api - The TUI API instance
+ * @returns Array of normalized Engram observations
  */
-function execSQLiteJson(query: string): EngramObservation[] {
+export async function listProjectMemories(api: any): Promise<EngramObservation[]> {
+  const projectName = resolveProjectName(api);
+  const projectCandidates = resolveProjectCandidates(api);
+
+  if (projectCandidates.length === 0) return [];
+
   try {
-    const output = execFileSync(
-      "sqlite3",
-      ["-json", ENGRAM_DB, query],
-      {
-        encoding: "utf-8",
-        timeout: 5000,
-        stdio: ["ignore", "pipe", "ignore"],
-      }
+    // Call the API for each candidate to ensure we don't miss memories associated with aliases
+    // The server implementation of /observations/recent handles a single project parameter.
+    const allResults = await Promise.all(
+      projectCandidates.map(async (project) => {
+        try {
+          const res = await fetch(`${ENGRAM_URL}/observations/recent?project=${encodeURIComponent(project)}&limit=50`, {
+            method: "GET",
+            headers: { "Accept": "application/json" },
+            signal: AbortSignal.timeout(3000),
+          });
+          return res.ok ? await res.json() : [];
+        } catch {
+          return [];
+        }
+      })
     );
 
-    return toArrayOutput(output) as EngramObservation[];
-  } catch {
+    const flatData = allResults.flat();
+    if (!Array.isArray(flatData) || flatData.length === 0) return [];
+
+    // Deduplicate by ID and normalize
+    const seenIds = new Set<number>();
+    const uniqueMemories = [];
+
+    for (const memory of flatData) {
+      if (memory?.id && !seenIds.has(memory.id)) {
+        seenIds.add(memory.id);
+        uniqueMemories.push(normalizeMemory(memory, projectName));
+      }
+    }
+
+    // Sort by updated_at or created_at descending (latest first)
+    return uniqueMemories.sort((a, b) => {
+      const dateA = a.updated_at || a.created_at || "";
+      const dateB = b.updated_at || b.created_at || "";
+      return dateB.localeCompare(dateA);
+    });
+  } catch (error) {
+    console.error("Failed to list project memories via Engram API:", error);
     return [];
   }
 }
 
 /**
- * Executes a SQLite command without returning results
- * 
- * @param query - The SQL command to execute
- */
-function execSQLite(query: string): void {
-  execFileSync("sqlite3", [ENGRAM_DB, query], {
-    encoding: "utf-8",
-    timeout: 5000,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-}
-
-/**
- * Lists all active memories associated with the current project
- * 
- * @param api - The TUI API instance
- * @returns Array of normalized Engram observations
- */
-export function listProjectMemories(api: any): EngramObservation[] {
-  const projectName = resolveProjectName(api);
-  const projectCandidates = resolveProjectCandidates(api);
-  const escapedProjects = projectCandidates
-    .map((name) => String(name).toLowerCase())
-    .map((name) => name.replace(/'/g, "''"))
-    .map((name) => `'${name}'`)
-    .join(", ");
-
-  if (!escapedProjects) return [];
-
-  const query = `
-    SELECT
-      id,
-      type,
-      title,
-      content,
-      project,
-      scope,
-      created_at,
-      updated_at,
-      ifnull(topic_key, '') as topic_key
-    FROM observations
-    WHERE lower(project) IN (${escapedProjects})
-      AND deleted_at IS NULL
-    ORDER BY updated_at DESC
-  `;
-
-  return execSQLiteJson(query).map((memory) => normalizeMemory(memory, projectName));
-}
-
-/**
- * Soft-deletes a specific project memory by setting its deleted_at timestamp
+ * Soft-deletes a specific project memory by calling the Engram HTTP API
  * 
  * @param memoryId - Unique ID of the memory to delete
  */
-export function deleteProjectMemory(memoryId: number): void {
+export async function deleteProjectMemory(memoryId: number): Promise<void> {
   const safeId = Number(memoryId);
   if (!Number.isInteger(safeId) || safeId <= 0) {
     throw new Error("Invalid Memory ID");
   }
 
-  execSQLite(`
-    UPDATE observations
-    SET deleted_at = datetime('now'), updated_at = datetime('now')
-    WHERE id = ${safeId}
-      AND deleted_at IS NULL;
-  `);
+  try {
+    const res = await fetch(`${ENGRAM_URL}/observations/${safeId}`, {
+      method: "DELETE",
+      headers: { "Accept": "application/json" },
+      signal: AbortSignal.timeout(3000),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Engram API delete returned ${res.status}: ${res.statusText}`);
+    }
+  } catch (error) {
+    console.error(`Failed to delete memory ${safeId} via Engram API:`, error);
+    throw error;
+  }
 }

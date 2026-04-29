@@ -142,9 +142,9 @@ function showDeleteMemory(api: any, memory: any) {
     <api.ui.DialogConfirm
       title="Delete Memory"
       message={`Permanently delete '${truncateText(title, 48)}'?`}
-      onConfirm={() => {
+      onConfirm={async () => {
         try {
-          deleteProjectMemory(memory.id);
+          await deleteProjectMemory(memory.id);
           api.ui.toast({ title: "Deleted", message: "Memory deleted successfully", variant: "success" });
           showProjectMemoriesMenuFn(api);
         } catch (e: any) {
@@ -158,10 +158,10 @@ function showDeleteMemory(api: any, memory: any) {
 }
 
 // Internal function references to resolve circular dependencies between dialogs
-let showProfilesMenuFn: (api: any) => void;
-let showProfileListFn: (api: any) => void;
-let showProfileDetailFn: (api: any, profileOpt: any) => void;
-let showProjectMemoriesMenuFn: (api: any) => void;
+let showProfilesMenuFn: (api: any) => void | Promise<void>;
+let showProfileListFn: (api: any) => void | Promise<void>;
+let showProfileDetailFn: (api: any, profileOpt: any) => void | Promise<void>;
+let showProjectMemoriesMenuFn: (api: any) => void | Promise<void>;
 
 export type BulkProfileActionOption = {
   title: string;
@@ -243,10 +243,10 @@ export function buildProfileVersionListOption(version: ProfileVersionMetadata): 
  * @param callbacks - Collection of dialog functions
  */
 export function registerDialogCallbacks(callbacks: {
-  showProfilesMenu: (api: any) => void;
-  showProfileList: (api: any) => void;
-  showProfileDetail: (api: any, profileOpt: any) => void;
-  showProjectMemoriesMenu: (api: any) => void;
+  showProfilesMenu: (api: any) => void | Promise<void>;
+  showProfileList: (api: any) => void | Promise<void>;
+  showProfileDetail: (api: any, profileOpt: any) => void | Promise<void>;
+  showProjectMemoriesMenu: (api: any) => void | Promise<void>;
 }) {
   showProfilesMenuFn = callbacks.showProfilesMenu;
   showProfileListFn = callbacks.showProfileList;
@@ -890,11 +890,11 @@ function updateAgentModel(
  * 
  * @param api - The TUI API instance
  */
-export function showProjectMemoriesMenu(api: any) {
+export async function showProjectMemoriesMenu(api: any) {
   const projectName = resolveProjectName(api) || "project";
 
   try {
-    const memories = listProjectMemories(api);
+    const memories = await listProjectMemories(api);
 
     if (memories.length === 0) {
       api.ui.toast({
@@ -930,12 +930,8 @@ export function showProjectMemoriesMenu(api: any) {
         onCancel={() => showProfilesMenuFn(api)}
       />
     ));
-  } catch (e) {
-    api.ui.toast({
-      title: "Engram Error",
-      message: "Failed to read project observations from local database.",
-      variant: "error",
-    });
+  } catch (e: any) {
+    api.ui.toast({ title: "Error", message: `Failed to load memories: ${e.message}`, variant: "error" });
     showProfilesMenuFn(api);
   }
 }
