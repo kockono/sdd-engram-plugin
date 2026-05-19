@@ -611,6 +611,23 @@ export function showCreateProfile(api: any) {
 }
 
 /**
+ * Builds the options list for the profile list dialog.
+ * Includes profile entries, a key hint, and a Back option.
+ * Extracted as a pure function for testability.
+ */
+export function buildProfileListOptions(files: string[], activeFile: string | undefined): Array<{ title: string; value: string; description?: string; category?: string }> {
+  return [
+    ...files.map((f) => ({
+      title: `${f === activeFile ? "✓ " : ""}${f.replace(".json", "")}`,
+      value: f,
+      description: f === activeFile ? "✓ Active" : "SDD Profile",
+    })),
+    { title: "a: activate · Enter: configure", value: "__key_hint__", category: NAV_CATEGORY },
+    { title: "← Back", value: "__back__", category: NAV_CATEGORY },
+  ];
+}
+
+/**
  * Displays a list of all saved SDD profiles for selection
  * 
  * @param api - The TUI API instance
@@ -632,20 +649,45 @@ export function showProfileList(api: any) {
 
   const activeFile = detectActiveProfileFile(files, api);
 
+  // Track highlighted profile index (initialized to active profile or first)
+  let highlightedIndexRef = activeFile ? files.indexOf(activeFile) : -1;
+  if (highlightedIndexRef === -1) highlightedIndexRef = 0;
+
+  // Register temporary keymap layer scoped to this dialog's lifecycle.
+  // Follows the same registerLayer / onDispose pattern proven in index.tsx (lines 117-143).
+  const disposeLayer = api.keymap.registerLayer({
+    priority: 60,
+    commands: [{
+      name: ":sdd-quick-activate",
+      title: "Quick Activate Profile",
+      run: () => {
+        const file = files[highlightedIndexRef];
+        if (!file) return false;
+        const profilePath = path.join(resolvePaths().profilesDir, file);
+        const profileName = file.replace(".json", "");
+        handleActivateProfile(api, profilePath, profileName);
+        return true;
+      },
+    }],
+    bindings: [{ key: "a", cmd: ":sdd-quick-activate" }],
+  });
+  api.lifecycle.onDispose(disposeLayer);
+
   api.ui.dialog.replace(() => (
     <api.ui.DialogSelect
       title="Select SDD Profile"
       current={activeFile}
-      options={[
-        ...files.map((f) => ({
-          title: `${f === activeFile ? "✓ " : ""}${f.replace(".json", "")}`,
-          value: f,
-          description: f === activeFile ? "✓ Active" : "SDD Profile",
-        })),
-        { title: "← Back", value: "__back__", category: NAV_CATEGORY },
-      ]}
+      options={buildProfileListOptions(files, activeFile)}
+      skipFilter
+      onMove={(opt: any) => {
+        if (opt.value !== "__back__" && opt.value !== "__key_hint__") {
+          const idx = files.indexOf(opt.value);
+          if (idx !== -1) highlightedIndexRef = idx;
+        }
+      }}
       onSelect={(opt: any) => {
         if (opt.value === "__back__") showProfilesMenuFn(api);
+        else if (opt.value === "__key_hint__") return; // No-op: informational hint
         else showProfileDetailFn(api, { title: String(opt.value).replace(".json", ""), value: opt.value });
       }}
       onCancel={() => showProfilesMenuFn(api)}

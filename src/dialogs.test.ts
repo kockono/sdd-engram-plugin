@@ -1,11 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BULK_ASSIGNMENT_MODE, BULK_ASSIGNMENT_TARGET, PROFILE_VERSION_SOURCE } from './types';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BULK_ASSIGNMENT_MODE, BULK_ASSIGNMENT_TARGET, NAV_CATEGORY, PROFILE_VERSION_SOURCE } from './types';
 import { buildBulkProfileActionOptions, buildProfileVersionListOption, createFallbackSubmenuDialogProps, createPrimarySubmenuDialogProps, createReasoningSubmenuDialogProps, formatProfileVersionPreviewLines } from './dialogs';
 import { buildProfileAgentRows } from './dialogs';
 import { buildProfileDetailAgentSections, resolveRuntimeOrchestratorPolicy, buildReasoningRowForAgent, buildReasoningBlockedMessage } from './dialogs';
 import { resolveProfileDetailSelectionAction } from './dialogs';
 import {
   PROFILE_DETAIL_SUBMENU,
+  buildProfileListOptions,
   createProfileDetailDialogProps,
   buildFallbackSubmenuOptions,
   buildPrimaryModelSubmenuOptions,
@@ -13,6 +14,7 @@ import {
   buildReasoningSubmenuOptions,
   returnToProfileDetailTarget,
   resolveProfileDetailNavigationAction,
+  showProfileList,
 } from './dialogs';
 import { getOrchestratorPolicy } from './orchestrator';
 
@@ -429,5 +431,287 @@ describe('dialog pure builders', () => {
     });
 
     expect(showHub).toHaveBeenCalledWith(api, profileOpt);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Quick Profile Activation (strict TDD)
+// ---------------------------------------------------------------------------
+
+describe('buildProfileListOptions — quick activation key hint', () => {
+  it('1.1: includes key-hint before Back with two profiles', () => {
+    const options = buildProfileListOptions(['team.json', 'project.json'], 'team.json');
+
+    // Profile options first
+    expect(options[0]).toEqual({
+      title: '✓ team',
+      value: 'team.json',
+      description: '✓ Active',
+    });
+    expect(options[1]).toEqual({
+      title: 'project',
+      value: 'project.json',
+      description: 'SDD Profile',
+    });
+
+    // Key hint positioned before Back (index 2)
+    expect(options[2]).toEqual({
+      title: 'a: activate · Enter: configure',
+      value: '__key_hint__',
+      category: NAV_CATEGORY,
+    });
+
+    // Back is the last option
+    expect(options[3]).toEqual({
+      title: '← Back',
+      value: '__back__',
+      category: NAV_CATEGORY,
+    });
+  });
+
+  it('1.1b: key hint shows even when no file is active', () => {
+    const options = buildProfileListOptions(['team.json'], '');
+
+    // Profile shows without checkmark
+    expect(options[0]).toEqual({
+      title: 'team',
+      value: 'team.json',
+      description: 'SDD Profile',
+    });
+
+    // Key hint still present
+    expect(options[1]).toEqual({
+      title: 'a: activate · Enter: configure',
+      value: '__key_hint__',
+      category: NAV_CATEGORY,
+    });
+  });
+});
+
+describe('showProfileList — quick activation keymap layer', () => {
+  let mockApi: any;
+  let capturedLayer: any;
+  let capturedDisposeFn: ReturnType<typeof vi.fn>;
+  let capturedOnSelect: any;
+
+  // Shared mock factories — test cases can override return values
+  const mockListProfileFiles = vi.fn().mockReturnValue(['team.json', 'project.json']);
+  const mockDetectActiveProfileFile = vi.fn().mockReturnValue('team.json');
+  const mockActivateProfileFile = vi.fn().mockName('activateProfileFile');
+
+  // jsxDEV mock: mimics @opentui/solid JSX transform so render functions work in tests.
+  // The @opentui/solid transform passes: jsxDEV(undefined, props, key, isStaticChildren, source, self).
+  // The component type is NOT passed as an argument — it is resolved internally.
+  function mockJsxDEV(...args: any[]) {
+    const props = args[1];
+    // Capture onSelect from DialogSelect props for test verification
+    if (props && typeof props === 'object' && typeof props.onSelect === 'function') {
+      capturedOnSelect = props.onSelect;
+    }
+    return null;
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+    capturedLayer = null;
+    capturedDisposeFn = vi.fn().mockName('disposeLayer');
+    capturedOnSelect = null;
+
+    // Reset mock return values to defaults
+    mockListProfileFiles.mockReturnValue(['team.json', 'project.json']);
+    mockDetectActiveProfileFile.mockReturnValue('team.json');
+    mockActivateProfileFile.mockReset();
+    mockActivateProfileFile.mockResolvedValue({ agent: { 'sdd-apply': { model: 'test/model' } } });
+
+    // Mock the JSX runtime (both dev and production variants)
+    vi.doMock('@opentui/solid/jsx-dev-runtime', () => ({
+      jsxDEV: mockJsxDEV,
+      jsx: mockJsxDEV,
+      jsxs: mockJsxDEV,
+      Fragment: 'Fragment',
+    }));
+    vi.doMock('@opentui/solid/jsx-runtime', () => ({
+      jsxDEV: mockJsxDEV,
+      jsx: mockJsxDEV,
+      jsxs: mockJsxDEV,
+      Fragment: 'Fragment',
+    }));
+
+    // Mock the profiles module with shared factories
+    vi.doMock('./profiles', () => ({
+      listProfileFiles: mockListProfileFiles,
+      detectActiveProfileFile: mockDetectActiveProfileFile,
+      activateProfileFile: mockActivateProfileFile,
+    }));
+
+    // Mock the config module
+    vi.doMock('./config', () => ({
+      ensureProfilesDir: vi.fn(),
+      resolvePaths: vi.fn().mockReturnValue({ profilesDir: '/mock/profiles' }),
+    }));
+
+    mockApi = {
+      keymap: {
+        registerLayer: vi.fn((layer: any) => {
+          capturedLayer = layer;
+          return capturedDisposeFn;
+        }),
+      },
+      lifecycle: {
+        onDispose: vi.fn(),
+      },
+      ui: {
+        dialog: {
+          replace: vi.fn((renderFn: () => any) => {
+            // Invoke the render function so DialogSelect captures onSelect
+            try { renderFn(); } catch (e) { /* ignore render errors in tests */ }
+          }),
+          clear: vi.fn(),
+          DialogSelect: vi.fn((props: any) => {
+            capturedOnSelect = props.onSelect;
+            return null;
+          }),
+          DialogConfirm: vi.fn(() => null),
+        },
+        toast: vi.fn(),
+      },
+      kv: {
+        set: vi.fn(),
+        get: vi.fn(),
+      },
+      state: {
+        config: {},
+        provider: [],
+      },
+    };
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe('keymap registration', () => {
+    it('1.2: "a" key activates the highlighted profile via captured command handler', async () => {
+      const { showProfileList: showList, registerDialogCallbacks: register } = await import('./dialogs');
+
+      // Register dialog callbacks so showProfileList doesn't crash on back navigation
+      register({
+        showProfilesMenu: vi.fn(),
+        showProfileList: vi.fn(),
+        showProfileDetail: vi.fn(),
+        showProjectMemoriesMenu: vi.fn(),
+      });
+
+      showList(mockApi);
+
+      // Layer must be registered
+      expect(mockApi.keymap.registerLayer).toHaveBeenCalledTimes(1);
+      expect(capturedLayer).toBeTruthy();
+      expect(capturedLayer.priority).toBe(60);
+      expect(capturedLayer.bindings).toEqual([{ key: 'a', cmd: ':sdd-quick-activate' }]);
+
+      // Capture the run() handler and execute it
+      const command = capturedLayer.commands.find((c: any) => c.name === ':sdd-quick-activate');
+      expect(command).toBeTruthy();
+
+      const result = command.run();
+      await (result instanceof Promise ? result : Promise.resolve(result));
+
+      // Verify activateProfileFile was called with correct profile info.
+      // path.join on Windows produces backslashes; match platform-appropriate separator
+      expect(mockActivateProfileFile).toHaveBeenCalledWith(
+        mockApi,
+        expect.stringMatching(/[/\\]mock[/\\]profiles[/\\]team\.json/),
+        'team',
+      );
+
+      // Quick-activate should NOT show a confirmation dialog — it should show a toast instead
+      expect(mockApi.ui.dialog.DialogConfirm).not.toHaveBeenCalled();
+      expect(mockApi.ui.toast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Profile Activated',
+          variant: 'success',
+        }),
+      );
+
+      // Should persist the active profile name
+      expect(mockApi.kv.set).toHaveBeenCalledWith('sdd-active-profile-name', 'team');
+    });
+
+    it('1.3: layer dispose function is wired to api.lifecycle.onDispose', async () => {
+      const { showProfileList: showList, registerDialogCallbacks: register } = await import('./dialogs');
+
+      register({
+        showProfilesMenu: vi.fn(),
+        showProfileList: vi.fn(),
+        showProfileDetail: vi.fn(),
+        showProjectMemoriesMenu: vi.fn(),
+      });
+
+      showList(mockApi);
+
+      // onDispose must be called with the dispose function returned by registerLayer
+      expect(mockApi.lifecycle.onDispose).toHaveBeenCalledWith(capturedDisposeFn);
+    });
+  });
+
+  describe('edge cases', () => {
+    it('1.4: zero profiles shows warning toast and does NOT register a keymap layer', async () => {
+      // Override the LIST to be empty for this test
+      mockListProfileFiles.mockReturnValue([]);
+
+      const { showProfileList: showList, registerDialogCallbacks: register } = await import('./dialogs');
+
+      // Register dialog callbacks so the 'back to menu' navigation works
+      register({
+        showProfilesMenu: vi.fn(),
+        showProfileList: vi.fn(),
+        showProfileDetail: vi.fn(),
+        showProjectMemoriesMenu: vi.fn(),
+      });
+
+      showList(mockApi);
+
+      // No layer should be registered
+      expect(mockApi.keymap.registerLayer).not.toHaveBeenCalled();
+
+      // Warning toast should be shown
+      expect(mockApi.ui.toast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'warning' }),
+      );
+    });
+  });
+
+  describe('existing navigation preservation', () => {
+    it('1.5: onSelect with profile value calls showProfileDetail, not activation', async () => {
+      const { showProfileList: showList, registerDialogCallbacks: register } = await import('./dialogs');
+
+      const showProfileDetailMock = vi.fn();
+      register({
+        showProfilesMenu: vi.fn(),
+        showProfileList: vi.fn(),
+        showProfileDetail: showProfileDetailMock,
+        showProjectMemoriesMenu: vi.fn(),
+      });
+
+      showList(mockApi);
+
+      // dialog.replace must have been called (first render)
+      expect(mockApi.ui.dialog.replace).toHaveBeenCalledTimes(1);
+      expect(capturedOnSelect).toBeTruthy();
+
+      // Simulate user selecting the second profile (project.json) via Enter/click
+      capturedOnSelect({ value: 'project.json' });
+
+      // Verify that activateProfileFile was NOT called (Enter still opens detail, not quick-activate)
+      expect(mockActivateProfileFile).not.toHaveBeenCalled();
+
+      // showProfileDetail was called with the correct profile info
+      expect(showProfileDetailMock).toHaveBeenCalledWith(
+        mockApi,
+        { title: 'project', value: 'project.json' },
+      );
+    });
   });
 });
